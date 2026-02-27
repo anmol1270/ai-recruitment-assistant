@@ -10,6 +10,8 @@ env/
 
 # Environment
 .env
+.env.*
+.env.production
 
 # Data (keep structure, ignore contents)
 data/calls.db
