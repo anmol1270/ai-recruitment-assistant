@@ -41,11 +41,11 @@ git push -u origin main
 In Railway dashboard → Variables, add:
 
 ```
-VAPI_API_KEY=<your-vapi-api-key>
-VAPI_PHONE_NUMBER_ID=<your-vapi-phone-number-id>
+VAPI_API_KEY=c44f5a54-a0fd-4a3c-b358-c7978a31f591
+VAPI_PHONE_NUMBER_ID=1d7a2f79-f76a-4924-a5ce-e61fbb416116
 OPENAI_API_KEY=<your-openai-api-key>
 WEBHOOK_BASE_URL=<Railway will provide this>
-WEBHOOK_SECRET=<your-webhook-secret>
+WEBHOOK_SECRET=prod_webhook_secret_2026
 CALLING_TIMEZONE=Europe/London
 CALLING_WINDOW_START=09:00
 CALLING_WINDOW_END=18:00
