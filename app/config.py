@@ -18,8 +18,8 @@ class Settings(BaseSettings):
     )
 
     # ── VAPI ────────────────────────────────────────────────────
-    vapi_api_key: str = Field(..., description="VAPI API key")
-    vapi_phone_number_id: str = Field(..., description="VAPI outbound phone number ID")
+    vapi_api_key: str = Field(default="", description="VAPI API key")
+    vapi_phone_number_id: str = Field(default="", description="VAPI outbound phone number ID")
     vapi_assistant_id: str = Field(default="", description="Pre-created assistant ID (blank = auto-create)")
     vapi_base_url: str = Field(default="https://api.vapi.ai")
 

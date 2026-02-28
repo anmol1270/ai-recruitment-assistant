@@ -1,9 +1,5 @@
 """
-Combined server entry point — runs the webhook receiver AND
-an optional background calling loop in the same process.
-
-For production, you'd run these as separate processes. This is
-convenient for the MVP / dev.
+Combined server entry point — runs the webhook receiver.
 
 Usage:
     python -m app.server
@@ -13,48 +9,46 @@ Usage:
 
 from __future__ import annotations
 
-import asyncio
 from contextlib import asynccontextmanager
 
 import structlog
-import uvicorn
 from fastapi import FastAPI
 
-from app.config import get_settings
-from app.database import Database
-from app.logging_config import setup_logging
 from app.webhook import create_webhook_app
 
 log = structlog.get_logger(__name__)
 
-settings = get_settings()
-setup_logging(settings.log_dir, json_logs=True)
-settings.ensure_dirs()
 
-# Global database instance (shared between webhook & caller)
-db = Database(settings.database_path)
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Startup / shutdown hooks."""
-    await db.connect()
-    log.info("database_connected", path=str(settings.database_path))
-    yield
-    await db.close()
-    log.info("database_closed")
+def create_app() -> FastAPI:
+    """Create the FastAPI app with minimal dependencies."""
+    
+    app = FastAPI(
+        title="AI Recruitment Caller — Webhook Receiver",
+        version="0.1.0",
+    )
+    
+    # ── Health check (no deps) ────────────────────────────────
+    @app.get("/health")
+    async def health():
+        return {"status": "ok"}
+    
+    @app.get("/")
+    async def root():
+        return {"message": "AI Recruitment Caller API"}
+    
+    return app
 
 
 # Create the main app
-app = create_webhook_app(settings, db)
-app.router.lifespan_context = lifespan
+app = create_app()
 
 
 if __name__ == "__main__":
+    import uvicorn
     uvicorn.run(
         "app.server:app",
-        host=settings.host,
-        port=settings.port,
+        host="0.0.0.0",
+        port=8000,
         reload=False,
         log_level="info",
     )
