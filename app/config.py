@@ -48,7 +48,7 @@ class Settings(BaseSettings):
 
     # ── Server ──────────────────────────────────────────────────
     host: str = Field(default="0.0.0.0")
-    port: int = Field(default=8000)
+    port: int = Field(default=8000, alias="PORT")  # Railway injects PORT env var
 
     def ensure_dirs(self) -> None:
         """Create required directories if they don't exist."""
