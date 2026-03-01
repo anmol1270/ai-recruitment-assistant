@@ -29,6 +29,18 @@ def normalise_phone(raw: str) -> tuple[str, bool]:
     if not cleaned:
         return (raw, False)
 
+    # Handle Excel scientific notation (e.g. "9.71585E+11" → "971585000000")
+    try:
+        if "e" in cleaned.lower() and "+" in cleaned:
+            cleaned = str(int(float(cleaned)))
+    except (ValueError, OverflowError):
+        pass
+
+    # If it's all digits, no + prefix, and doesn't start with 0 (local format),
+    # try prepending + for international format
+    if cleaned.isdigit() and len(cleaned) > 10 and not cleaned.startswith("0"):
+        cleaned = "+" + cleaned
+
     try:
         parsed = phonenumbers.parse(cleaned, _DEFAULT_REGION)
     except NumberParseException:
