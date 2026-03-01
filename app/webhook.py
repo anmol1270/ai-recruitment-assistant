@@ -30,6 +30,11 @@ _ENDED_REASON_MAP: dict[str, Disposition] = {
     "phone-call-provider-closed-websocket": Disposition.FAILED,
     "error": Disposition.FAILED,
     "pipeline-error": Disposition.FAILED,
+    # Successful call endings — these should NOT default to FAILED
+    "customer-ended-call": None,  # None = rely on analysis disposition
+    "assistant-ended-call": None,
+    "assistant-said-end-call-phrase": None,
+    "max-duration-reached": None,
 }
 
 
@@ -39,12 +44,41 @@ def _parse_disposition_from_analysis(analysis: Optional[dict]) -> Optional[Dispo
         return None
 
     structured = analysis.get("structuredData") or analysis.get("structured_data") or {}
-    disp_str = structured.get("disposition", "")
+    disp_str = structured.get("disposition", "").strip().upper().replace(" ", "_").replace("-", "_")
 
+    if not disp_str:
+        return None
+
+    # Exact match
     try:
         return Disposition(disp_str)
     except ValueError:
-        return None
+        pass
+
+    # Fuzzy match — check if any enum value is contained in the string
+    for d in Disposition:
+        if d.value in disp_str or disp_str in d.value:
+            return d
+
+    log.warning("unknown_disposition_from_analysis", raw=disp_str)
+    return None
+
+
+def _infer_disposition_from_summary(summary: str) -> Disposition:
+    """Best-effort disposition from call summary text when structured data is missing."""
+    s = summary.lower()
+    if any(kw in s for kw in ["not looking", "not interested", "not open", "declined"]):
+        return Disposition.NOT_LOOKING
+    if any(kw in s for kw in ["actively looking", "open to", "interested in", "looking for"]):
+        return Disposition.ACTIVE_LOOKING
+    if any(kw in s for kw in ["call back", "callback", "busy", "bad time"]):
+        return Disposition.CALL_BACK
+    if any(kw in s for kw in ["wrong number", "wrong person"]):
+        return Disposition.WRONG_NUMBER
+    if any(kw in s for kw in ["remove", "do not call", "unsubscribe"]):
+        return Disposition.DNC
+    # Default for completed calls with no clear signal
+    return Disposition.NOT_QUALIFIED
 
 
 def _extract_analysis_fields(analysis: Optional[dict]) -> dict:
@@ -152,16 +186,29 @@ async def _handle_end_of_call(payload: dict, db: Database) -> None:
     recording_url = message.get("recordingUrl", "") or call.get("recordingUrl", "")
     analysis = message.get("analysis") or call.get("analysis")
 
+    # ── Extract analysis fields first (needed for fallback) ─────
+    analysis_fields = _extract_analysis_fields(analysis)
+
     # ── Determine disposition ───────────────────────────────────
-    # Priority: analysis > ended_reason mapping > FAILED
+    # Priority: analysis > ended_reason mapping > COMPLETED/FAILED
     disposition = _parse_disposition_from_analysis(analysis)
 
     if not disposition:
-        disposition = _ENDED_REASON_MAP.get(ended_reason, Disposition.FAILED)
+        mapped = _ENDED_REASON_MAP.get(ended_reason)
+        if mapped is not None:
+            disposition = mapped
+        elif ended_reason in _ENDED_REASON_MAP:
+            # Explicitly mapped to None = successful call, but no analysis disposition
+            disposition = _infer_disposition_from_summary(
+                analysis_fields.get("summary", "")
+            )
+        else:
+            # Unknown ended_reason — try summary heuristic before defaulting
+            disposition = _infer_disposition_from_summary(
+                analysis_fields.get("summary", "")
+            )
 
-    # ── Extract analysis fields ─────────────────────────────────
-    analysis_fields = _extract_analysis_fields(analysis)
-
+    # ── Build summary ───────────────────────────────────────────
     short_summary = analysis_fields.get("summary", "")
     if not short_summary and ended_reason:
         short_summary = f"Call ended: {ended_reason}"
