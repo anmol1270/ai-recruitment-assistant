@@ -733,6 +733,27 @@ def create_saas_app() -> FastAPI:
         except Exception as e:
             return {"error": str(e)}
 
+    @app.post("/debug/fix-candidate/{candidate_id}")
+    async def debug_fix_candidate(candidate_id: int, request: Request):
+        """Fix candidate phone and reset for retry (temp debug)."""
+        body = await request.json()
+        phone = body.get("phone", "")
+        db = _require_db()
+        async with db._pool.acquire() as conn:
+            await conn.execute(
+                """UPDATE candidates SET phone_e164 = $1, status = 'PENDING',
+                   vapi_call_id = '', attempt_count = 0, last_called_at = NULL
+                   WHERE id = $2""",
+                phone, candidate_id,
+            )
+            # Also reset campaign status to draft so we can re-start
+            await conn.execute(
+                """UPDATE campaigns SET status = 'draft'
+                   WHERE id = (SELECT campaign_id FROM candidates WHERE id = $1)""",
+                candidate_id,
+            )
+        return {"ok": True, "candidate_id": candidate_id, "new_phone": phone}
+
     # ═══════════════════════════════════════════════════════════
     #  Dashboard UI
     # ═══════════════════════════════════════════════════════════
