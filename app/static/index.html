@@ -1,0 +1,867 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Recruitment Caller</title>
+    <style>
+        :root {
+            --primary: #4f46e5;
+            --primary-dark: #4338ca;
+            --primary-light: #e0e7ff;
+            --success: #059669;
+            --success-light: #d1fae5;
+            --warning: #d97706;
+            --warning-light: #fef3c7;
+            --danger: #dc2626;
+            --danger-light: #fee2e2;
+            --gray-50: #f9fafb;
+            --gray-100: #f3f4f6;
+            --gray-200: #e5e7eb;
+            --gray-300: #d1d5db;
+            --gray-500: #6b7280;
+            --gray-700: #374151;
+            --gray-900: #111827;
+            --radius: 12px;
+            --shadow: 0 1px 3px rgba(0,0,0,.1), 0 1px 2px rgba(0,0,0,.06);
+            --shadow-lg: 0 10px 15px -3px rgba(0,0,0,.1), 0 4px 6px -2px rgba(0,0,0,.05);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: var(--gray-50);
+            color: var(--gray-900);
+            line-height: 1.5;
+        }
+
+        /* ── Layout ────────────────────────────────────────── */
+        .navbar {
+            background: white;
+            border-bottom: 1px solid var(--gray-200);
+            padding: 0 24px;
+            height: 64px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: var(--shadow);
+        }
+        .navbar h1 {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--primary);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .navbar h1 span { font-size: 24px; }
+        .nav-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--gray-500);
+        }
+        .status-dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: var(--success);
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: .4; }
+        }
+
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+
+        /* ── Cards ─────────────────────────────────────────── */
+        .card {
+            background: white;
+            border: 1px solid var(--gray-200);
+            border-radius: var(--radius);
+            padding: 24px;
+            margin-bottom: 20px;
+            box-shadow: var(--shadow);
+        }
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+        .card-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--gray-900);
+        }
+
+        /* ── Stats Grid ────────────────────────────────────── */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .stat-card {
+            background: white;
+            border: 1px solid var(--gray-200);
+            border-radius: var(--radius);
+            padding: 20px;
+            box-shadow: var(--shadow);
+        }
+        .stat-label {
+            font-size: 13px;
+            color: var(--gray-500);
+            text-transform: uppercase;
+            letter-spacing: .5px;
+            font-weight: 500;
+        }
+        .stat-value {
+            font-size: 32px;
+            font-weight: 700;
+            margin-top: 4px;
+            color: var(--gray-900);
+        }
+        .stat-value.active { color: var(--primary); }
+        .stat-value.success { color: var(--success); }
+        .stat-value.warning { color: var(--warning); }
+
+        /* ── Two column layout ─────────────────────────────── */
+        .two-col {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        @media (max-width: 768px) {
+            .two-col { grid-template-columns: 1fr; }
+        }
+
+        /* ── Upload area ───────────────────────────────────── */
+        .upload-zone {
+            border: 2px dashed var(--gray-300);
+            border-radius: var(--radius);
+            padding: 40px 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all .2s;
+            background: var(--gray-50);
+        }
+        .upload-zone:hover, .upload-zone.dragover {
+            border-color: var(--primary);
+            background: var(--primary-light);
+        }
+        .upload-zone.has-file {
+            border-color: var(--success);
+            background: var(--success-light);
+        }
+        .upload-icon { font-size: 40px; margin-bottom: 8px; }
+        .upload-text { color: var(--gray-500); font-size: 14px; }
+        .upload-filename {
+            margin-top: 8px;
+            font-weight: 600;
+            color: var(--success);
+        }
+
+        /* ── Form elements ─────────────────────────────────── */
+        label {
+            display: block;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--gray-700);
+            margin-bottom: 6px;
+        }
+        input[type="text"], input[type="tel"], select {
+            width: 100%;
+            padding: 10px 14px;
+            border: 1px solid var(--gray-300);
+            border-radius: 8px;
+            font-size: 14px;
+            outline: none;
+            transition: border-color .15s;
+        }
+        input:focus, select:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(79,70,229,.1);
+        }
+        .form-group { margin-bottom: 16px; }
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        /* ── Buttons ───────────────────────────────────────── */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all .15s;
+        }
+        .btn:disabled { opacity: .5; cursor: not-allowed; }
+        .btn-primary { background: var(--primary); color: white; }
+        .btn-primary:hover:not(:disabled) { background: var(--primary-dark); }
+        .btn-success { background: var(--success); color: white; }
+        .btn-success:hover:not(:disabled) { background: #047857; }
+        .btn-outline {
+            background: white;
+            color: var(--gray-700);
+            border: 1px solid var(--gray-300);
+        }
+        .btn-outline:hover:not(:disabled) { background: var(--gray-50); }
+        .btn-danger { background: var(--danger); color: white; }
+        .btn-danger:hover:not(:disabled) { background: #b91c1c; }
+        .btn-block { width: 100%; justify-content: center; }
+
+        /* ── Table ─────────────────────────────────────────── */
+        .table-wrap {
+            overflow-x: auto;
+            margin-top: 12px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        th {
+            text-align: left;
+            padding: 10px 12px;
+            background: var(--gray-50);
+            border-bottom: 2px solid var(--gray-200);
+            font-weight: 600;
+            color: var(--gray-700);
+            white-space: nowrap;
+        }
+        td {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--gray-100);
+            color: var(--gray-700);
+        }
+        tr:hover td { background: var(--gray-50); }
+
+        /* ── Badges ────────────────────────────────────────── */
+        .badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: .3px;
+        }
+        .badge-pending { background: var(--warning-light); color: var(--warning); }
+        .badge-active { background: #dbeafe; color: #2563eb; }
+        .badge-not-looking { background: var(--gray-100); color: var(--gray-500); }
+        .badge-callback { background: #fef3c7; color: #92400e; }
+        .badge-failed { background: var(--danger-light); color: var(--danger); }
+        .badge-qualified { background: var(--success-light); color: var(--success); }
+        .badge-dnc { background: var(--danger-light); color: var(--danger); }
+
+        /* ── Toast / Alerts ────────────────────────────────── */
+        .toast-container {
+            position: fixed;
+            top: 80px;
+            right: 24px;
+            z-index: 999;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .toast {
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            box-shadow: var(--shadow-lg);
+            animation: slideIn .3s;
+            max-width: 400px;
+        }
+        .toast-success { background: var(--success); color: white; }
+        .toast-error { background: var(--danger); color: white; }
+        .toast-info { background: var(--primary); color: white; }
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+
+        /* ── Log panel ─────────────────────────────────────── */
+        .log-panel {
+            background: var(--gray-900);
+            color: #a5f3a5;
+            border-radius: 8px;
+            padding: 16px;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+            line-height: 1.8;
+        }
+        .log-panel .log-time { color: var(--gray-500); }
+        .log-panel .log-error { color: #fca5a5; }
+        .log-panel .log-success { color: #6ee7b7; }
+
+        /* ── Misc ──────────────────────────────────────────── */
+        .text-muted { color: var(--gray-500); font-size: 13px; }
+        .mt-2 { margin-top: 8px; }
+        .mt-4 { margin-top: 16px; }
+        .mb-4 { margin-bottom: 16px; }
+        .flex-between { display: flex; align-items: center; justify-content: space-between; }
+        .hidden { display: none; }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: var(--gray-500);
+        }
+        .empty-state .icon { font-size: 48px; margin-bottom: 12px; }
+
+        .audio-link {
+            color: var(--primary);
+            text-decoration: none;
+            font-weight: 500;
+        }
+        .audio-link:hover { text-decoration: underline; }
+
+        .section-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--gray-500);
+            text-transform: uppercase;
+            letter-spacing: .5px;
+            margin-bottom: 12px;
+        }
+    </style>
+</head>
+<body>
+
+<!-- Navbar -->
+<nav class="navbar">
+    <h1><span>📞</span> AI Recruitment Caller</h1>
+    <div class="nav-status">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="serverStatus">Connected</span>
+    </div>
+</nav>
+
+<!-- Toast container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<div class="container">
+
+    <!-- Stats -->
+    <div class="stats-grid" id="statsGrid">
+        <div class="stat-card">
+            <div class="stat-label">Total Records</div>
+            <div class="stat-value" id="statTotal">0</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Calls Made</div>
+            <div class="stat-value active" id="statCalls">0</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Pending</div>
+            <div class="stat-value warning" id="statPending">0</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Calling Active</div>
+            <div class="stat-value success" id="statActive">No</div>
+        </div>
+    </div>
+
+    <!-- Main two-column -->
+    <div class="two-col">
+
+        <!-- Left: Upload + Controls -->
+        <div>
+            <!-- Upload CSV -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">📁 Upload Candidates CSV</span>
+                </div>
+                <div class="upload-zone" id="uploadZone" onclick="document.getElementById('csvFile').click()">
+                    <div class="upload-icon">📄</div>
+                    <div class="upload-text">Drop CSV file here or click to browse</div>
+                    <div class="upload-filename hidden" id="fileName"></div>
+                </div>
+                <input type="file" id="csvFile" accept=".csv" style="display:none">
+
+                <div class="form-group mt-4">
+                    <label for="jobRole">Job Role</label>
+                    <input type="text" id="jobRole" placeholder="e.g. Software Engineer, Data Analyst">
+                </div>
+
+                <button class="btn btn-primary btn-block" id="uploadBtn" disabled onclick="uploadCSV()">
+                    ⬆️ Upload CSV
+                </button>
+            </div>
+
+            <!-- Call Controls -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">📞 Call Controls</span>
+                </div>
+                <button class="btn btn-success btn-block mb-4" id="startCallsBtn" onclick="startCalls()">
+                    ▶️ Start Calling
+                </button>
+                <div class="form-row">
+                    <button class="btn btn-outline btn-block" onclick="refreshStatus()">
+                        🔄 Refresh Status
+                    </button>
+                    <button class="btn btn-outline btn-block" onclick="exportReport()">
+                        📥 Download Report
+                    </button>
+                </div>
+            </div>
+
+            <!-- Quick Test Call -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">🧪 Quick Test Call</span>
+                </div>
+                <div class="form-group">
+                    <label for="testPhone">Phone Number (international format)</label>
+                    <input type="tel" id="testPhone" placeholder="+971585371270">
+                </div>
+                <div class="form-group">
+                    <label for="testName">Name</label>
+                    <input type="text" id="testName" placeholder="John">
+                </div>
+                <button class="btn btn-primary btn-block" onclick="testCall()">
+                    📞 Place Test Call
+                </button>
+            </div>
+        </div>
+
+        <!-- Right: Results + Log -->
+        <div>
+            <!-- Disposition Breakdown -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">📊 Disposition Breakdown</span>
+                </div>
+                <div id="dispositionBreakdown">
+                    <div class="empty-state">
+                        <div class="icon">📊</div>
+                        No call data yet
+                    </div>
+                </div>
+            </div>
+
+            <!-- Activity Log -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">📋 Activity Log</span>
+                    <button class="btn btn-outline" style="padding:6px 12px; font-size:12px" onclick="clearLog()">Clear</button>
+                </div>
+                <div class="log-panel" id="logPanel">
+                    <div><span class="log-time">[--:--:--]</span> Dashboard loaded. Waiting for activity...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Call Records Table -->
+    <div class="card mt-4">
+        <div class="card-header">
+            <span class="card-title">📋 Call Records</span>
+            <button class="btn btn-outline" style="padding:6px 12px; font-size:12px" onclick="refreshStatus()">🔄 Refresh</button>
+        </div>
+        <div class="table-wrap">
+            <table id="recordsTable">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Phone</th>
+                        <th>Job Role</th>
+                        <th>Status</th>
+                        <th>Summary</th>
+                        <th>Recording</th>
+                    </tr>
+                </thead>
+                <tbody id="recordsBody">
+                    <tr><td colspan="6" class="empty-state"><div class="icon">📭</div>No records yet. Upload a CSV to get started.</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+</div>
+
+<script>
+    const API = '';  // Same origin
+
+    // ── Toast notifications ──────────────────────────────
+    function toast(msg, type = 'info') {
+        const el = document.createElement('div');
+        el.className = `toast toast-${type}`;
+        el.textContent = msg;
+        document.getElementById('toastContainer').appendChild(el);
+        setTimeout(() => el.remove(), 4000);
+    }
+
+    // ── Activity log ─────────────────────────────────────
+    function addLog(msg, type = '') {
+        const panel = document.getElementById('logPanel');
+        const now = new Date().toLocaleTimeString();
+        const cls = type === 'error' ? 'log-error' : type === 'success' ? 'log-success' : '';
+        panel.innerHTML += `<div class="${cls}"><span class="log-time">[${now}]</span> ${msg}</div>`;
+        panel.scrollTop = panel.scrollHeight;
+    }
+
+    function clearLog() {
+        document.getElementById('logPanel').innerHTML = '';
+    }
+
+    // ── File upload handling ─────────────────────────────
+    const fileInput = document.getElementById('csvFile');
+    const uploadZone = document.getElementById('uploadZone');
+    const uploadBtn = document.getElementById('uploadBtn');
+
+    fileInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file) {
+            document.getElementById('fileName').textContent = `✅ ${file.name} (${(file.size/1024).toFixed(1)} KB)`;
+            document.getElementById('fileName').classList.remove('hidden');
+            uploadZone.classList.add('has-file');
+            uploadBtn.disabled = false;
+            addLog(`File selected: ${file.name}`, 'success');
+        }
+    });
+
+    // Drag & drop
+    uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); uploadZone.classList.add('dragover'); });
+    uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
+    uploadZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        uploadZone.classList.remove('dragover');
+        const file = e.dataTransfer.files[0];
+        if (file && file.name.endsWith('.csv')) {
+            fileInput.files = e.dataTransfer.files;
+            fileInput.dispatchEvent(new Event('change'));
+        } else {
+            toast('Please drop a CSV file', 'error');
+        }
+    });
+
+    // ── Upload CSV ───────────────────────────────────────
+    async function uploadCSV() {
+        const file = fileInput.files[0];
+        if (!file) return toast('No file selected', 'error');
+
+        const jobRole = document.getElementById('jobRole').value;
+        const form = new FormData();
+        form.append('file', file);
+        form.append('job_role', jobRole);
+
+        uploadBtn.disabled = true;
+        uploadBtn.textContent = '⏳ Uploading...';
+        addLog(`Uploading ${file.name}...`);
+
+        try {
+            const resp = await fetch(`${API}/upload-csv`, { method: 'POST', body: form });
+            const data = await resp.json();
+
+            if (resp.ok) {
+                toast(`✅ ${data.valid_records} candidates uploaded`, 'success');
+                addLog(`Upload complete: ${data.valid_records} valid, ${data.rejected_records} rejected`, 'success');
+
+                if (data.rejected_records > 0) {
+                    addLog(`Rejected: ${data.rejected_details.map(r => `Row ${r.row}: ${r.reason}`).join(', ')}`, 'error');
+                }
+            } else {
+                toast(`❌ ${data.detail || 'Upload failed'}`, 'error');
+                addLog(`Upload error: ${data.detail}`, 'error');
+            }
+        } catch (e) {
+            toast('Upload failed — server error', 'error');
+            addLog(`Upload error: ${e.message}`, 'error');
+        }
+
+        uploadBtn.disabled = false;
+        uploadBtn.textContent = '⬆️ Upload CSV';
+        refreshStatus();
+    }
+
+    // ── Start Calls ──────────────────────────────────────
+    async function startCalls() {
+        const btn = document.getElementById('startCallsBtn');
+        btn.disabled = true;
+        btn.textContent = '⏳ Starting...';
+        addLog('Starting outbound calls...');
+
+        try {
+            const resp = await fetch(`${API}/start-calls`, { method: 'POST' });
+            const data = await resp.json();
+
+            if (data.status === 'started') {
+                toast(`📞 Calls started (Run: ${data.run_id})`, 'success');
+                addLog(`Calling batch started. Run ID: ${data.run_id}`, 'success');
+                // Auto-refresh every 5 seconds while calls are active
+                startAutoRefresh();
+            } else if (data.status === 'already_running') {
+                toast('Calls already in progress', 'info');
+                addLog('Calling batch already running', '');
+            } else {
+                toast(data.detail || data.message || 'Error starting calls', 'error');
+                addLog(`Error: ${data.detail || data.message}`, 'error');
+            }
+        } catch (e) {
+            toast('Failed to start calls', 'error');
+            addLog(`Error: ${e.message}`, 'error');
+        }
+
+        btn.disabled = false;
+        btn.textContent = '▶️ Start Calling';
+    }
+
+    // ── Refresh Status ───────────────────────────────────
+    let autoRefreshInterval = null;
+
+    function startAutoRefresh() {
+        if (autoRefreshInterval) return;
+        autoRefreshInterval = setInterval(refreshStatus, 5000);
+        addLog('Auto-refresh enabled (every 5s)');
+    }
+
+    function stopAutoRefresh() {
+        if (autoRefreshInterval) {
+            clearInterval(autoRefreshInterval);
+            autoRefreshInterval = null;
+        }
+    }
+
+    async function refreshStatus() {
+        try {
+            const resp = await fetch(`${API}/status`);
+            const data = await resp.json();
+
+            document.getElementById('statTotal').textContent = data.total_records || 0;
+            document.getElementById('statCalls').textContent = data.records_with_calls || 0;
+            document.getElementById('statPending').textContent = data.by_status?.PENDING || 0;
+
+            const isActive = data.calling_active;
+            document.getElementById('statActive').textContent = isActive ? 'Yes' : 'No';
+            document.getElementById('statActive').className = `stat-value ${isActive ? 'success' : ''}`;
+
+            if (!isActive && autoRefreshInterval) {
+                stopAutoRefresh();
+                addLog('Calling complete. Auto-refresh stopped.', 'success');
+            }
+
+            // Disposition breakdown
+            renderDispositions(data.by_status || {});
+
+            // Also fetch records for the table
+            await fetchRecords();
+
+        } catch (e) {
+            document.getElementById('serverStatus').textContent = 'Disconnected';
+            document.getElementById('statusDot').style.background = '#dc2626';
+        }
+    }
+
+    function renderDispositions(byStatus) {
+        const container = document.getElementById('dispositionBreakdown');
+        const entries = Object.entries(byStatus);
+
+        if (entries.length === 0) {
+            container.innerHTML = '<div class="empty-state"><div class="icon">📊</div>No call data yet</div>';
+            return;
+        }
+
+        let html = '<div style="display:grid;gap:8px">';
+        for (const [status, count] of entries) {
+            const pct = Math.round((count / Object.values(byStatus).reduce((a,b) => a+b, 0)) * 100);
+            const color = getStatusColor(status);
+            html += `
+                <div style="display:flex;align-items:center;gap:12px">
+                    <span class="badge badge-${getStatusBadge(status)}" style="min-width:120px;text-align:center">${status}</span>
+                    <div style="flex:1;background:var(--gray-100);border-radius:4px;height:24px;overflow:hidden">
+                        <div style="width:${pct}%;background:${color};height:100%;border-radius:4px;transition:width .3s"></div>
+                    </div>
+                    <span style="font-weight:700;min-width:40px;text-align:right">${count}</span>
+                </div>`;
+        }
+        html += '</div>';
+        container.innerHTML = html;
+    }
+
+    function getStatusColor(status) {
+        const map = {
+            PENDING: '#d97706', ACTIVE_LOOKING: '#2563eb', NOT_LOOKING: '#6b7280',
+            CALL_BACK: '#92400e', FAILED: '#dc2626', QUALIFIED: '#059669',
+            PARTIALLY_QUALIFIED: '#0891b2', NOT_QUALIFIED: '#6b7280',
+            NO_ANSWER: '#9ca3af', VOICEMAIL: '#8b5cf6', BUSY: '#ea580c',
+            WRONG_NUMBER: '#dc2626', DNC: '#991b1b',
+        };
+        return map[status] || '#6b7280';
+    }
+
+    function getStatusBadge(status) {
+        const map = {
+            PENDING: 'pending', ACTIVE_LOOKING: 'active', NOT_LOOKING: 'not-looking',
+            CALL_BACK: 'callback', FAILED: 'failed', QUALIFIED: 'qualified',
+            DNC: 'dnc', NO_ANSWER: 'pending', VOICEMAIL: 'pending',
+        };
+        return map[status] || 'pending';
+    }
+
+    // ── Fetch records for table ──────────────────────────
+    async function fetchRecords() {
+        try {
+            const resp = await fetch(`${API}/export`);
+            if (!resp.ok) return;
+
+            const text = await resp.text();
+            const lines = text.trim().split('\n');
+            if (lines.length <= 1) return;
+
+            const headers = lines[0].split(',');
+            const tbody = document.getElementById('recordsBody');
+            let html = '';
+
+            for (let i = 1; i < lines.length; i++) {
+                const cols = parseCSVLine(lines[i]);
+                if (cols.length < 7) continue;
+
+                const name = `${cols[1] || ''} ${cols[2] || ''}`.trim() || cols[0];
+                const phone = cols[3];
+                const jobRole = cols[4];
+                const status = cols[5];
+                const summary = cols[6] || '-';
+                const recording = cols[12] || '';
+
+                html += `<tr>
+                    <td><strong>${escapeHtml(name)}</strong></td>
+                    <td>${escapeHtml(phone)}</td>
+                    <td>${escapeHtml(jobRole)}</td>
+                    <td><span class="badge badge-${getStatusBadge(status)}">${escapeHtml(status)}</span></td>
+                    <td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(summary)}">${escapeHtml(summary)}</td>
+                    <td>${recording ? `<a href="${escapeHtml(recording)}" target="_blank" class="audio-link">🎧 Listen</a>` : '-'}</td>
+                </tr>`;
+            }
+
+            tbody.innerHTML = html || '<tr><td colspan="6" class="empty-state">No records</td></tr>';
+        } catch (e) {
+            // Silently fail — table just won't update
+        }
+    }
+
+    // ── Export Report ────────────────────────────────────
+    async function exportReport() {
+        addLog('Downloading report...');
+        try {
+            const resp = await fetch(`${API}/export?include_transcript=true`);
+            if (!resp.ok) throw new Error('Export failed');
+
+            const blob = await resp.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `recruitment_report_${new Date().toISOString().slice(0,10)}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+
+            toast('📥 Report downloaded', 'success');
+            addLog('Report exported successfully', 'success');
+        } catch (e) {
+            toast('Export failed', 'error');
+            addLog(`Export error: ${e.message}`, 'error');
+        }
+    }
+
+    // ── Test Call ────────────────────────────────────────
+    async function testCall() {
+        const phone = document.getElementById('testPhone').value.trim();
+        const name = document.getElementById('testName').value.trim() || 'Test';
+
+        if (!phone) return toast('Enter a phone number', 'error');
+
+        addLog(`Placing test call to ${phone}...`);
+        toast('📞 Placing call...', 'info');
+
+        try {
+            const form = new FormData();
+            form.append('phone', phone);
+            form.append('name', name);
+
+            const resp = await fetch(`${API}/test-call`, { method: 'POST', body: form });
+            const data = await resp.json();
+
+            if (data.status === 'ok') {
+                toast('✅ Call placed! Phone should ring shortly.', 'success');
+                addLog(`Test call queued — VAPI call ID: ${data.vapi_response?.id}`, 'success');
+            } else {
+                toast(`❌ ${data.error || 'Call failed'}`, 'error');
+                addLog(`Test call error: ${data.error}`, 'error');
+                if (data.response_body) addLog(`VAPI: ${data.response_body}`, 'error');
+            }
+        } catch (e) {
+            toast('Call failed — server error', 'error');
+            addLog(`Error: ${e.message}`, 'error');
+        }
+    }
+
+    // ── Utility ──────────────────────────────────────────
+    function escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str || '';
+        return div.innerHTML;
+    }
+
+    function parseCSVLine(line) {
+        const result = [];
+        let current = '';
+        let inQuotes = false;
+
+        for (let i = 0; i < line.length; i++) {
+            const ch = line[i];
+            if (ch === '"') {
+                if (inQuotes && line[i+1] === '"') {
+                    current += '"';
+                    i++;
+                } else {
+                    inQuotes = !inQuotes;
+                }
+            } else if (ch === ',' && !inQuotes) {
+                result.push(current);
+                current = '';
+            } else {
+                current += ch;
+            }
+        }
+        result.push(current);
+        return result;
+    }
+
+    // ── Init ─────────────────────────────────────────────
+    refreshStatus();
+    setInterval(() => {
+        fetch(`${API}/health`).then(r => {
+            if (r.ok) {
+                document.getElementById('serverStatus').textContent = 'Connected';
+                document.getElementById('statusDot').style.background = '#059669';
+            }
+        }).catch(() => {
+            document.getElementById('serverStatus').textContent = 'Disconnected';
+            document.getElementById('statusDot').style.background = '#dc2626';
+        });
+    }, 15000);
+</script>
+
+</body>
+</html>

@@ -23,7 +23,8 @@ from typing import Optional
 
 import structlog
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
 from app.csv_pipeline import ingest_csv
@@ -84,9 +85,17 @@ def create_app() -> FastAPI:
     async def health():
         return {"status": "ok"}
 
-    @app.get("/")
+    # ── Serve the dashboard UI ─────────────────────────────────
+    static_dir = Path(__file__).parent / "static"
+    if static_dir.exists():
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+    @app.get("/", response_class=HTMLResponse)
     async def root():
-        return {"message": "AI Recruitment Caller API", "version": "0.2.0"}
+        index_path = static_dir / "index.html"
+        if index_path.exists():
+            return HTMLResponse(content=index_path.read_text(), status_code=200)
+        return HTMLResponse(content="<h1>AI Recruitment Caller API v0.2.0</h1>", status_code=200)
 
     # ─────────────────────────────────────────────────────────
     #   Test Call (Debug) Endpoint
