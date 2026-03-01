@@ -2,6 +2,7 @@
 CSV ingestion pipeline:
   - Read input CSV
   - Validate & normalise UK phone numbers
+  - Auto-generate unique_record_id if not present
   - Deduplicate on phone_e164
   - Apply suppression / DNC list
   - Return clean list of CandidateRecords
@@ -10,6 +11,7 @@ CSV ingestion pipeline:
 from __future__ import annotations
 
 import csv
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -20,10 +22,10 @@ from app.phone_utils import normalise_uk_phone
 
 log = structlog.get_logger(__name__)
 
-# Columns we require (case-insensitive matching)
-_REQUIRED_COLUMNS = {"unique_record_id", "phone"}
+# Only phone is strictly required — unique_record_id is auto-generated if missing
+_REQUIRED_COLUMNS = {"phone"}
 # Columns we recognise but are optional
-_OPTIONAL_COLUMNS = {"first_name", "last_name", "email"}
+_OPTIONAL_COLUMNS = {"unique_record_id", "first_name", "last_name", "email"}
 
 
 def _load_suppression_list(path: Path) -> set[str]:
@@ -95,14 +97,18 @@ def ingest_csv(
                 )
 
         for row_num, row in enumerate(reader, start=2):
-            record_id = row.get(header_map["unique_record_id"], "").strip()
+            # Auto-generate unique_record_id if column missing or value empty
+            if "unique_record_id" in header_map:
+                record_id = row.get(header_map["unique_record_id"], "").strip()
+            else:
+                record_id = ""
+
+            if not record_id:
+                record_id = f"REC-{uuid.uuid4().hex[:8].upper()}"
+
             phone_raw = row.get(header_map["phone"], "").strip()
 
             # ── Validation ──────────────────────────────────────
-            if not record_id:
-                rejected.append({**row, "_reason": "missing_record_id", "_row": row_num})
-                continue
-
             if record_id in seen_ids:
                 rejected.append({**row, "_reason": "duplicate_record_id", "_row": row_num})
                 continue
