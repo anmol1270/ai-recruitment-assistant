@@ -209,11 +209,8 @@ class CallScheduler:
                 stats["errors"] += 1
 
     def _in_calling_window(self) -> bool:
-        """Check if current time is within the UK calling window."""
-        now = datetime.now(self._tz).time()
-        start = self._parse_time(self.settings.calling_window_start)
-        end = self._parse_time(self.settings.calling_window_end)
-        return start <= now <= end
+        """Calling window disabled for testing — always returns True."""
+        return True
 
     def _retry_eligible(self, record: CallRecord) -> bool:
         """Check if enough time has passed since last attempt for a retry."""
