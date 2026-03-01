@@ -146,11 +146,21 @@ def create_app() -> FastAPI:
             job_role=job_role,
         )
 
+        # Build rejection summary for the response
+        rejection_details = []
+        for r in rejected[:20]:  # Show first 20 rejections max
+            rejection_details.append({
+                "row": r.get("_row", "?"),
+                "reason": r.get("_reason", "unknown"),
+                "phone": r.get("phone", r.get("Phone", "")),
+            })
+
         return {
             "status": "ok",
             "valid_records": len(valid),
             "rejected_records": len(rejected),
             "job_role": job_role or "(none — generic screening)",
+            "rejected_details": rejection_details,
             "message": f"Ingested {len(valid)} candidates. Use POST /start-calls to begin calling.",
         }
 

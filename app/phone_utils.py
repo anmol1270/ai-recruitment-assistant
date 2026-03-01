@@ -1,6 +1,7 @@
 """
-UK phone-number validation, normalisation (E.164), and formatting utilities.
-Uses the `phonenumbers` library with GB-specific rules.
+Phone-number validation, normalisation (E.164), and formatting utilities.
+Supports international numbers with a default region of GB for local-format numbers.
+Uses the `phonenumbers` library.
 """
 
 from __future__ import annotations
@@ -8,13 +9,15 @@ from __future__ import annotations
 import phonenumbers
 from phonenumbers import PhoneNumberFormat, NumberParseException
 
-# UK country code
+# Default region for numbers without a country code
 _DEFAULT_REGION = "GB"
 
 
-def normalise_uk_phone(raw: str) -> tuple[str, bool]:
+def normalise_phone(raw: str) -> tuple[str, bool]:
     """
     Attempt to normalise a raw phone string to E.164.
+    Accepts international numbers. Numbers without a + prefix are
+    assumed to be GB by default.
 
     Returns
     -------
@@ -34,15 +37,15 @@ def normalise_uk_phone(raw: str) -> tuple[str, bool]:
     if not phonenumbers.is_possible_number(parsed):
         return (raw, False)
 
-    # Accept both valid numbers and possible numbers (covers test ranges)
-    # For stricter validation, switch to is_valid_number
-    if parsed.country_code != 44:
-        # Allow non-GB numbers only if they're fully valid
-        if not phonenumbers.is_valid_number(parsed):
-            return (raw, False)
+    if not phonenumbers.is_valid_number(parsed):
+        return (raw, False)
 
     e164 = phonenumbers.format_number(parsed, PhoneNumberFormat.E164)
     return (e164, True)
+
+
+# Keep the old name as an alias for backward compatibility
+normalise_uk_phone = normalise_phone
 
 
 def is_uk_mobile(e164: str) -> bool:
