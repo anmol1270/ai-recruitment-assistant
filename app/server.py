@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import httpx
 import io
 import json
 import shutil
@@ -107,6 +108,14 @@ def create_app() -> FastAPI:
                 job_role="Test Call",
             )
             return {"status": "ok", "vapi_response": result}
+        except httpx.HTTPStatusError as e:
+            return {
+                "status": "error",
+                "error": str(e),
+                "response_body": e.response.text,
+                "status_code": e.response.status_code,
+                "assistant_id": _assistant_id,
+            }
         except Exception as e:
             return {"status": "error", "error": str(e), "type": type(e).__name__}
 
