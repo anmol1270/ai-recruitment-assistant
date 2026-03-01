@@ -88,6 +88,29 @@ def create_app() -> FastAPI:
         return {"message": "AI Recruitment Caller API", "version": "0.2.0"}
 
     # ─────────────────────────────────────────────────────────
+    #   Test Call (Debug) Endpoint
+    # ─────────────────────────────────────────────────────────
+    @app.post("/test-call")
+    async def test_call(phone: str = Form(...), name: str = Form(default="Test")):
+        """
+        Immediately attempt one outbound call (synchronous) and return
+        the VAPI response or error — useful for debugging.
+        """
+        if not _assistant_id:
+            return {"error": "No assistant ID — VAPI not configured or init failed."}
+        try:
+            result = await _vapi.place_call(
+                phone_e164=phone,
+                assistant_id=_assistant_id,
+                candidate_name=name,
+                record_id="test-debug",
+                job_role="Test Call",
+            )
+            return {"status": "ok", "vapi_response": result}
+        except Exception as e:
+            return {"status": "error", "error": str(e), "type": type(e).__name__}
+
+    # ─────────────────────────────────────────────────────────
     #   CSV Upload Endpoint
     # ─────────────────────────────────────────────────────────
     @app.post("/upload-csv")
