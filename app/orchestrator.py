@@ -66,7 +66,7 @@ class Orchestrator:
         await self.db.close()
         log.info("orchestrator_stopped", run_id=self._run_id)
 
-    async def ingest(self, csv_path: str | Path) -> dict:
+    async def ingest(self, csv_path: str | Path, job_role: str = "") -> dict:
         """
         Ingest a CSV file: validate, normalise, deduplicate, suppress.
         Returns stats dict.
@@ -84,7 +84,10 @@ class Orchestrator:
         for candidate in valid:
             record = CallRecord(
                 unique_record_id=candidate.unique_record_id,
+                first_name=candidate.first_name,
+                last_name=candidate.last_name,
                 phone_e164=candidate.phone_e164,
+                job_role=job_role,
                 status=Disposition.PENDING,
             )
             await self.db.upsert_candidate(record)

@@ -167,8 +167,9 @@ class CallScheduler:
                 result = await self.vapi.place_call(
                     phone_e164=record.phone_e164,
                     assistant_id=assistant_id,
-                    candidate_name=record.unique_record_id,  # Will be overridden with first_name if available
+                    candidate_name=record.first_name or record.unique_record_id,
                     record_id=record.unique_record_id,
+                    job_role=record.job_role,
                 )
 
                 vapi_call_id = result.get("id", "")

@@ -20,7 +20,10 @@ log = structlog.get_logger(__name__)
 # Output columns in order
 OUTPUT_COLUMNS = [
     "unique_record_id",
+    "first_name",
+    "last_name",
     "phone_e164",
+    "job_role",
     "status",
     "short_summary",
     "last_called_at",
@@ -62,7 +65,10 @@ async def generate_output_csv(
         for record in records:
             row = {
                 "unique_record_id": record.unique_record_id,
+                "first_name": record.first_name,
+                "last_name": record.last_name,
                 "phone_e164": record.phone_e164,
+                "job_role": record.job_role,
                 "status": record.status.value,
                 "short_summary": record.short_summary,
                 "last_called_at": record.last_called_at.isoformat()

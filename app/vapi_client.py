@@ -102,7 +102,9 @@ class VAPIClient:
                 "messages": [
                     {
                         "role": "system",
-                        "content": RECRUITMENT_SYSTEM_PROMPT,
+                        "content": RECRUITMENT_SYSTEM_PROMPT.replace(
+                            "{job_role_section}", ""
+                        ).replace("{job_role}", "open").replace("{first_name}", "there"),
                     }
                 ],
                 "temperature": 0.7,
@@ -127,17 +129,20 @@ class VAPIClient:
                             "disposition": {
                                 "type": "string",
                                 "enum": [
+                                    "QUALIFIED",
+                                    "PARTIALLY_QUALIFIED",
+                                    "NOT_QUALIFIED",
                                     "ACTIVE_LOOKING",
                                     "NOT_LOOKING",
                                     "CALL_BACK",
                                     "WRONG_NUMBER",
                                     "DNC",
                                 ],
-                                "description": "The call disposition based on candidate response",
+                                "description": "The call disposition and qualification status",
                             },
                             "summary": {
                                 "type": "string",
-                                "description": "1-2 sentence summary of the call",
+                                "description": "1-2 sentence summary including qualification assessment",
                             },
                             "location": {
                                 "type": "string",
@@ -182,6 +187,7 @@ class VAPIClient:
         assistant_id: str,
         candidate_name: str = "",
         record_id: str = "",
+        job_role: str = "",
     ) -> dict:
         """
         Place an outbound call via VAPI.
@@ -190,25 +196,34 @@ class VAPIClient:
         """
         client = await self._client()
 
-        # Inject candidate name into the system prompt for personalisation
+        # Build a job-role-aware, personalised prompt
         assistant_overrides = {}
-        if candidate_name:
-            personalised_prompt = RECRUITMENT_SYSTEM_PROMPT.replace(
-                "{first_name}", candidate_name
-            )
-            assistant_overrides = {
-                "model": {
-                    "provider": "openai",
-                    "model": "gpt-4o-mini",
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": personalised_prompt,
-                        }
-                    ],
-                },
-                "firstMessage": f"Hi {candidate_name}! Is this a good time to talk briefly?",
-            }
+        name = candidate_name or "there"
+        role = job_role or "open"
+
+        job_role_section = ""
+        if job_role:
+            job_role_section = f"JOB ROLE: {job_role}\nYou are screening candidates specifically for this role. Ask about their relevant experience and assess their fit."
+
+        personalised_prompt = (
+            RECRUITMENT_SYSTEM_PROMPT
+            .replace("{first_name}", name)
+            .replace("{job_role}", role)
+            .replace("{job_role_section}", job_role_section)
+        )
+        assistant_overrides = {
+            "model": {
+                "provider": "openai",
+                "model": "gpt-4o-mini",
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": personalised_prompt,
+                    }
+                ],
+            },
+            "firstMessage": f"Hi {name}! Is this a good time to talk briefly?",
+        }
 
         payload = {
             "assistantId": assistant_id,
@@ -218,17 +233,17 @@ class VAPIClient:
             },
             "metadata": {
                 "unique_record_id": record_id,
+                "job_role": job_role,
             },
+            "assistantOverrides": assistant_overrides,
         }
-
-        if assistant_overrides:
-            payload["assistantOverrides"] = assistant_overrides
 
         log.info(
             "placing_call",
             phone=phone_e164,
             record_id=record_id,
             candidate=candidate_name,
+            job_role=job_role,
         )
 
         resp = await client.post("/call/phone", json=payload)

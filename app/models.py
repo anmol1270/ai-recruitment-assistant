@@ -13,6 +13,9 @@ from pydantic import BaseModel, Field
 
 # ── Disposition enum ────────────────────────────────────────────
 class Disposition(str, enum.Enum):
+    QUALIFIED = "QUALIFIED"
+    PARTIALLY_QUALIFIED = "PARTIALLY_QUALIFIED"
+    NOT_QUALIFIED = "NOT_QUALIFIED"
     ACTIVE_LOOKING = "ACTIVE_LOOKING"
     NOT_LOOKING = "NOT_LOOKING"
     CALL_BACK = "CALL_BACK"
@@ -40,8 +43,11 @@ class CandidateRecord(BaseModel):
 class CallRecord(BaseModel):
     id: Optional[int] = None
     unique_record_id: str
+    first_name: str = ""
+    last_name: str = ""
     phone_e164: str
     vapi_call_id: str = ""
+    job_role: str = ""
     status: Disposition = Disposition.PENDING
     short_summary: str = ""
     attempt_count: int = 0

@@ -16,8 +16,11 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS call_records (
     id                   INTEGER PRIMARY KEY AUTOINCREMENT,
     unique_record_id     TEXT NOT NULL,
+    first_name           TEXT DEFAULT '',
+    last_name            TEXT DEFAULT '',
     phone_e164           TEXT NOT NULL,
     vapi_call_id         TEXT DEFAULT '',
+    job_role             TEXT DEFAULT '',
     status               TEXT DEFAULT 'PENDING',
     short_summary        TEXT DEFAULT '',
     attempt_count        INTEGER DEFAULT 0,
@@ -31,6 +34,10 @@ CREATE TABLE IF NOT EXISTS call_records (
     updated_at           TEXT NOT NULL,
     UNIQUE(unique_record_id)
 );
+
+-- Migrate existing tables: add new columns if they don't exist
+-- (SQLite ignores ALTER TABLE ADD COLUMN if column already exists via IF NOT EXISTS workaround)
+
 
 CREATE TABLE IF NOT EXISTS run_log (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,6 +69,7 @@ class Database:
         self._db.row_factory = aiosqlite.Row
         await self._db.executescript(_SCHEMA)
         await self._db.commit()
+        await self._ensure_columns()
 
     async def close(self) -> None:
         if self._db:
@@ -74,15 +82,22 @@ class Database:
         await self._db.execute(
             """
             INSERT INTO call_records
-                (unique_record_id, phone_e164, status, attempt_count, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (unique_record_id, first_name, last_name, phone_e164, job_role,
+                 status, attempt_count, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(unique_record_id) DO UPDATE SET
+                first_name = excluded.first_name,
+                last_name = excluded.last_name,
                 phone_e164 = excluded.phone_e164,
+                job_role = excluded.job_role,
                 updated_at = excluded.updated_at
             """,
             (
                 record.unique_record_id,
+                record.first_name,
+                record.last_name,
                 record.phone_e164,
+                record.job_role,
                 record.status.value,
                 record.attempt_count,
                 record.created_at.isoformat(),
@@ -218,13 +233,31 @@ class Database:
 
     # ── Helpers ─────────────────────────────────────────────────
 
+    async def _ensure_columns(self) -> None:
+        """Add columns that may not exist in older databases."""
+        for col, coltype in [
+            ("first_name", "TEXT DEFAULT ''"),
+            ("last_name", "TEXT DEFAULT ''"),
+            ("job_role", "TEXT DEFAULT ''"),
+        ]:
+            try:
+                await self._db.execute(
+                    f"ALTER TABLE call_records ADD COLUMN {col} {coltype}"
+                )
+            except Exception:
+                pass  # Column already exists
+        await self._db.commit()
+
     @staticmethod
     def _row_to_record(row) -> CallRecord:
         return CallRecord(
             id=row["id"],
             unique_record_id=row["unique_record_id"],
+            first_name=row["first_name"] if "first_name" in row.keys() else "",
+            last_name=row["last_name"] if "last_name" in row.keys() else "",
             phone_e164=row["phone_e164"],
             vapi_call_id=row["vapi_call_id"],
+            job_role=row["job_role"] if "job_role" in row.keys() else "",
             status=Disposition(row["status"]),
             short_summary=row["short_summary"],
             attempt_count=row["attempt_count"],
