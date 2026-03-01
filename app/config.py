@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     vapi_base_url: str = Field(default="https://api.vapi.ai")
 
     # ── Webhook ─────────────────────────────────────────────────
-    webhook_base_url: str = Field(default="http://localhost:8000")
+    webhook_base_url: str = Field(default="https://web-production-61074.up.railway.app")
     webhook_secret: str = Field(default="change_me")
 
     # ── Calling rules ───────────────────────────────────────────
