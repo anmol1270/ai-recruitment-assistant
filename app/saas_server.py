@@ -697,6 +697,23 @@ def create_saas_app() -> FastAPI:
             return {"status": "error", "error": str(e)}
 
     # ═══════════════════════════════════════════════════════════
+    #  Debug / Admin (temporary)
+    # ═══════════════════════════════════════════════════════════
+    @app.get("/debug/campaigns")
+    async def debug_campaigns():
+        """Show all campaigns + candidates (temp debug — remove later)."""
+        db = _require_db()
+        async with db._pool.acquire() as conn:
+            campaigns = await conn.fetch("SELECT id, user_id, name, status, total_candidates, vapi_assistant_id FROM campaigns ORDER BY id")
+            candidates = await conn.fetch("SELECT id, campaign_id, first_name, phone_e164, status, vapi_call_id, attempt_count, last_called_at FROM candidates ORDER BY id")
+            users = await conn.fetch("SELECT id, email, name FROM users ORDER BY id")
+        return {
+            "users": [dict(r) for r in users],
+            "campaigns": [dict(r) for r in campaigns],
+            "candidates": [dict(r) for r in candidates],
+        }
+
+    # ═══════════════════════════════════════════════════════════
     #  Dashboard UI
     # ═══════════════════════════════════════════════════════════
     @app.get("/", response_class=HTMLResponse)
