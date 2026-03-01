@@ -713,6 +713,26 @@ def create_saas_app() -> FastAPI:
             "candidates": [dict(r) for r in candidates],
         }
 
+    @app.get("/debug/call/{vapi_call_id}")
+    async def debug_call(vapi_call_id: str):
+        """Check VAPI call status (temp debug — remove later)."""
+        try:
+            data = await _vapi.get_call(vapi_call_id)
+            return {
+                "id": data.get("id"),
+                "status": data.get("status"),
+                "endedReason": data.get("endedReason"),
+                "phoneNumberId": data.get("phoneNumberId"),
+                "customer": data.get("customer"),
+                "startedAt": data.get("startedAt"),
+                "endedAt": data.get("endedAt"),
+                "cost": data.get("cost"),
+                "transcript": data.get("transcript", "")[:500],
+                "analysis": data.get("analysis"),
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
     # ═══════════════════════════════════════════════════════════
     #  Dashboard UI
     # ═══════════════════════════════════════════════════════════
