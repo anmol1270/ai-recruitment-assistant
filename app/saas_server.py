@@ -106,12 +106,36 @@ def create_saas_app() -> FastAPI:
     if static_dir.exists():
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
+    # ── DB-availability middleware ─────────────────────────────
+    @app.middleware("http")
+    async def db_guard(request: Request, call_next):
+        path = request.url.path
+        # Allow health, static, and dashboard root through even without DB
+        if path in ("/health", "/", "/docs", "/openapi.json") or path.startswith("/static"):
+            return await call_next(request)
+        if _db is None:
+            return JSONResponse(
+                {"detail": "Database not connected. Set DATABASE_URL on Railway."},
+                status_code=503,
+            )
+        return await call_next(request)
+
+    # ── helpers ──────────────────────────────────────────────
+    def _require_db():
+        """Raise 503 if the database is not connected."""
+        if _db is None:
+            raise HTTPException(
+                503,
+                "Database not connected. Set DATABASE_URL environment variable.",
+            )
+        return _db
+
     # ═══════════════════════════════════════════════════════════
     #  Health check
     # ═══════════════════════════════════════════════════════════
     @app.get("/health")
     async def health():
-        return {"status": "ok", "version": "1.0.0"}
+        return {"status": "ok", "version": "1.0.0", "db": _db is not None}
 
     # ═══════════════════════════════════════════════════════════
     #  Auth routes
@@ -135,8 +159,9 @@ def create_saas_app() -> FastAPI:
             raise HTTPException(400, "Valid email required")
 
         # Create or fetch user (use email hash as pseudo google_id)
+        db = _require_db()
         google_id = f"email_{hashlib.sha256(email.encode()).hexdigest()[:16]}"
-        user = await _db.create_user(
+        user = await db.create_user(
             google_id=google_id, email=email, name=name, avatar_url=""
         )
 
@@ -155,7 +180,8 @@ def create_saas_app() -> FastAPI:
         avatar = user_info.get("picture", "")
 
         # Create or update user
-        user = await _db.create_user(
+        db = _require_db()
+        user = await db.create_user(
             google_id=google_id, email=email, name=name, avatar_url=avatar
         )
 
