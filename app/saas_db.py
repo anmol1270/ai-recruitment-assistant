@@ -25,8 +25,8 @@ CREATE TABLE IF NOT EXISTS users (
     stripe_subscription_id  VARCHAR(255),
     calls_this_month        INT DEFAULT 0,
     monthly_call_limit      INT DEFAULT 50,
-    created_at      TIMESTAMP DEFAULT NOW(),
-    updated_at      TIMESTAMP DEFAULT NOW()
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS campaigns (
@@ -40,8 +40,8 @@ CREATE TABLE IF NOT EXISTS campaigns (
     total_candidates   INT DEFAULT 0,
     total_called       INT DEFAULT 0,
     vapi_assistant_id  VARCHAR(255) DEFAULT '',
-    created_at      TIMESTAMP DEFAULT NOW(),
-    updated_at      TIMESTAMP DEFAULT NOW()
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS candidates (
@@ -62,8 +62,8 @@ CREATE TABLE IF NOT EXISTS candidates (
     extracted_location      VARCHAR(255) DEFAULT '',
     extracted_availability  VARCHAR(255) DEFAULT '',
     attempt_count       INT DEFAULT 0,
-    last_called_at      TIMESTAMP,
-    created_at          TIMESTAMP DEFAULT NOW()
+    last_called_at      TIMESTAMPTZ,
+    created_at          TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS call_logs (
@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS call_logs (
     action          VARCHAR(50),
     status          VARCHAR(30),
     detail          TEXT,
-    created_at      TIMESTAMP DEFAULT NOW()
+    created_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS usage (
@@ -113,6 +113,16 @@ class SaaSDatabase:
         )
         async with self._pool.acquire() as conn:
             await conn.execute(SCHEMA_SQL)
+            # Migrate existing TIMESTAMP columns to TIMESTAMPTZ
+            await conn.execute("""
+                ALTER TABLE users       ALTER COLUMN created_at       TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+                ALTER TABLE users       ALTER COLUMN updated_at       TYPE TIMESTAMPTZ USING updated_at AT TIME ZONE 'UTC';
+                ALTER TABLE campaigns   ALTER COLUMN created_at       TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+                ALTER TABLE campaigns   ALTER COLUMN updated_at       TYPE TIMESTAMPTZ USING updated_at AT TIME ZONE 'UTC';
+                ALTER TABLE candidates  ALTER COLUMN last_called_at   TYPE TIMESTAMPTZ USING last_called_at AT TIME ZONE 'UTC';
+                ALTER TABLE candidates  ALTER COLUMN created_at       TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+                ALTER TABLE call_logs   ALTER COLUMN created_at       TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+            """)
         log.info("database_connected", url=self.database_url[:30] + "...")
 
     async def close(self) -> None:
