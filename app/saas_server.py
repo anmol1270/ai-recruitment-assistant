@@ -118,8 +118,33 @@ def create_saas_app() -> FastAPI:
     # ═══════════════════════════════════════════════════════════
     @app.get("/auth/login")
     async def auth_login():
-        url = _auth.get_login_url()
-        return RedirectResponse(url=url)
+        if _settings.google_client_id:
+            url = _auth.get_login_url()
+            return RedirectResponse(url=url)
+        # No Google OAuth configured — redirect to home (use /auth/quick-login)
+        return RedirectResponse(url="/", status_code=302)
+
+    @app.post("/auth/quick-login")
+    async def quick_login(request: Request):
+        """Email-only login — no OAuth required. For dev/demo use."""
+        body = await request.json()
+        email = body.get("email", "").strip().lower()
+        name = body.get("name", "").strip() or email.split("@")[0]
+
+        if not email or "@" not in email:
+            raise HTTPException(400, "Valid email required")
+
+        # Create or fetch user (use email hash as pseudo google_id)
+        google_id = f"email_{hashlib.sha256(email.encode()).hexdigest()[:16]}"
+        user = await _db.create_user(
+            google_id=google_id, email=email, name=name, avatar_url=""
+        )
+
+        token = _auth.create_session_token(user["id"], email)
+        response = JSONResponse({"ok": True, "email": email})
+        _auth.set_session_cookie(response, token)
+        log.info("quick_login", user_id=user["id"], email=email)
+        return response
 
     @app.get("/auth/callback")
     async def auth_callback(code: str = Query(...)):
