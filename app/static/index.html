@@ -1,866 +1,1072 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Recruitment Caller</title>
-    <style>
-        :root {
-            --primary: #4f46e5;
-            --primary-dark: #4338ca;
-            --primary-light: #e0e7ff;
-            --success: #059669;
-            --success-light: #d1fae5;
-            --warning: #d97706;
-            --warning-light: #fef3c7;
-            --danger: #dc2626;
-            --danger-light: #fee2e2;
-            --gray-50: #f9fafb;
-            --gray-100: #f3f4f6;
-            --gray-200: #e5e7eb;
-            --gray-300: #d1d5db;
-            --gray-500: #6b7280;
-            --gray-700: #374151;
-            --gray-900: #111827;
-            --radius: 12px;
-            --shadow: 0 1px 3px rgba(0,0,0,.1), 0 1px 2px rgba(0,0,0,.06);
-            --shadow-lg: 0 10px 15px -3px rgba(0,0,0,.1), 0 4px 6px -2px rgba(0,0,0,.05);
-        }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RecruitAI — AI Recruitment Caller</title>
+<style>
+:root {
+  --bg: #0f1117;
+  --surface: #1a1d27;
+  --surface2: #242736;
+  --border: #2e3145;
+  --text: #e4e6ed;
+  --text-dim: #8b8fa3;
+  --primary: #6c5ce7;
+  --primary-hover: #7d6ff0;
+  --success: #00b894;
+  --warning: #fdcb6e;
+  --danger: #e17055;
+  --info: #74b9ff;
+  --radius: 12px;
+  --radius-sm: 8px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+a { color: var(--primary); text-decoration: none; }
+a:hover { color: var(--primary-hover); }
+button, .btn {
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 14px;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 10px 20px;
+  font-weight: 600;
+  transition: all .2s;
+}
+.btn-primary { background: var(--primary); color: #fff; }
+.btn-primary:hover { background: var(--primary-hover); transform: translateY(-1px); }
+.btn-success { background: var(--success); color: #fff; }
+.btn-success:hover { opacity: .9; }
+.btn-danger { background: var(--danger); color: #fff; }
+.btn-danger:hover { opacity: .9; }
+.btn-outline {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+.btn-outline:hover { border-color: var(--primary); color: var(--primary); }
+.btn-sm { padding: 6px 14px; font-size: 13px; }
+.btn-lg { padding: 14px 28px; font-size: 16px; }
+input, textarea, select {
+  font-family: inherit;
+  font-size: 14px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  color: var(--text);
+  width: 100%;
+  transition: border-color .2s;
+}
+input:focus, textarea:focus, select:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+label { display: block; margin-bottom: 6px; font-size: 13px; color: var(--text-dim); font-weight: 600; }
+.form-group { margin-bottom: 16px; }
 
-        * { box-sizing: border-box; margin: 0; padding: 0; }
+/* Layout */
+.app-container { display: flex; min-height: 100vh; }
+.sidebar {
+  width: 260px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  top: 0; left: 0; bottom: 0;
+  z-index: 100;
+}
+.sidebar-brand {
+  padding: 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.sidebar-brand h1 { font-size: 18px; }
+.sidebar-brand .logo { font-size: 24px; }
+.sidebar-nav { flex: 1; padding: 12px; }
+.sidebar-nav .nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 14px;
+  transition: all .15s;
+  margin-bottom: 2px;
+}
+.sidebar-nav .nav-item:hover { background: var(--surface2); color: var(--text); }
+.sidebar-nav .nav-item.active { background: var(--primary); color: #fff; }
+.sidebar-user {
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.sidebar-user img {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+}
+.sidebar-user .user-info { flex: 1; }
+.sidebar-user .user-name { font-size: 14px; font-weight: 600; }
+.sidebar-user .user-plan {
+  font-size: 12px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+.main-content { margin-left: 260px; flex: 1; padding: 24px 32px; }
 
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            background: var(--gray-50);
-            color: var(--gray-900);
-            line-height: 1.5;
-        }
+/* Pages */
+.page { display: none; }
+.page.active { display: block; }
 
-        /* ── Layout ────────────────────────────────────────── */
-        .navbar {
-            background: white;
-            border-bottom: 1px solid var(--gray-200);
-            padding: 0 24px;
-            height: 64px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            position: sticky;
-            top: 0;
-            z-index: 100;
-            box-shadow: var(--shadow);
-        }
-        .navbar h1 {
-            font-size: 20px;
-            font-weight: 700;
-            color: var(--primary);
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        .navbar h1 span { font-size: 24px; }
-        .nav-status {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 13px;
-            color: var(--gray-500);
-        }
-        .status-dot {
-            width: 8px; height: 8px;
-            border-radius: 50%;
-            background: var(--success);
-            animation: pulse 2s infinite;
-        }
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: .4; }
-        }
+/* Cards */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  margin-bottom: 20px;
+}
+.card-title { font-size: 18px; font-weight: 700; margin-bottom: 16px; }
 
-        .container {
-            max-width: 1100px;
-            margin: 0 auto;
-            padding: 24px;
-        }
+/* Stats Grid */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+}
+.stat-label { font-size: 13px; color: var(--text-dim); margin-bottom: 4px; }
+.stat-value { font-size: 28px; font-weight: 800; }
+.stat-sub { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
 
-        /* ── Cards ─────────────────────────────────────────── */
-        .card {
-            background: white;
-            border: 1px solid var(--gray-200);
-            border-radius: var(--radius);
-            padding: 24px;
-            margin-bottom: 20px;
-            box-shadow: var(--shadow);
-        }
-        .card-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 16px;
-        }
-        .card-title {
-            font-size: 16px;
-            font-weight: 600;
-            color: var(--gray-900);
-        }
+/* Campaign grid */
+.campaigns-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+.campaign-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  cursor: pointer;
+  transition: all .2s;
+}
+.campaign-card:hover { border-color: var(--primary); transform: translateY(-2px); }
+.campaign-card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
+.campaign-card h3 { font-size: 16px; }
+.campaign-status {
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.campaign-status.draft { background: var(--surface2); color: var(--text-dim); }
+.campaign-status.active { background: rgba(0,184,148,.15); color: var(--success); }
+.campaign-status.completed { background: rgba(108,92,231,.15); color: var(--primary); }
+.campaign-meta { font-size: 13px; color: var(--text-dim); }
+.campaign-meta strong { color: var(--text); }
+.campaign-stats-row {
+  display: flex;
+  gap: 16px;
+  margin-top: 12px;
+  font-size: 13px;
+}
+.campaign-stats-row span { color: var(--text-dim); }
+.campaign-stats-row strong { color: var(--text); }
 
-        /* ── Stats Grid ────────────────────────────────────── */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 16px;
-            margin-bottom: 24px;
-        }
-        .stat-card {
-            background: white;
-            border: 1px solid var(--gray-200);
-            border-radius: var(--radius);
-            padding: 20px;
-            box-shadow: var(--shadow);
-        }
-        .stat-label {
-            font-size: 13px;
-            color: var(--gray-500);
-            text-transform: uppercase;
-            letter-spacing: .5px;
-            font-weight: 500;
-        }
-        .stat-value {
-            font-size: 32px;
-            font-weight: 700;
-            margin-top: 4px;
-            color: var(--gray-900);
-        }
-        .stat-value.active { color: var(--primary); }
-        .stat-value.success { color: var(--success); }
-        .stat-value.warning { color: var(--warning); }
+/* Table */
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th {
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+}
+td { padding: 10px 12px; border-bottom: 1px solid rgba(46,49,69,.5); }
+tr:hover { background: var(--surface2); }
 
-        /* ── Two column layout ─────────────────────────────── */
-        .two-col {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
-        }
-        @media (max-width: 768px) {
-            .two-col { grid-template-columns: 1fr; }
-        }
+/* Badges */
+.badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.badge-pending { background: rgba(253,203,110,.15); color: var(--warning); }
+.badge-active_looking { background: rgba(0,184,148,.15); color: var(--success); }
+.badge-not_looking { background: rgba(225,112,85,.15); color: var(--danger); }
+.badge-call_back { background: rgba(116,185,255,.15); color: var(--info); }
+.badge-dnc, .badge-wrong_number { background: rgba(225,112,85,.15); color: var(--danger); }
+.badge-failed { background: rgba(225,112,85,.1); color: #e17055; }
+.badge-active { background: rgba(0,184,148,.15); color: var(--success); }
 
-        /* ── Upload area ───────────────────────────────────── */
-        .upload-zone {
-            border: 2px dashed var(--gray-300);
-            border-radius: var(--radius);
-            padding: 40px 20px;
-            text-align: center;
-            cursor: pointer;
-            transition: all .2s;
-            background: var(--gray-50);
-        }
-        .upload-zone:hover, .upload-zone.dragover {
-            border-color: var(--primary);
-            background: var(--primary-light);
-        }
-        .upload-zone.has-file {
-            border-color: var(--success);
-            background: var(--success-light);
-        }
-        .upload-icon { font-size: 40px; margin-bottom: 8px; }
-        .upload-text { color: var(--gray-500); font-size: 14px; }
-        .upload-filename {
-            margin-top: 8px;
-            font-weight: 600;
-            color: var(--success);
-        }
+/* Modal */
+.modal-overlay {
+  display: none;
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,.6);
+  z-index: 200;
+  align-items: center;
+  justify-content: center;
+}
+.modal-overlay.active { display: flex; }
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 28px;
+  width: 100%;
+  max-width: 500px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+.modal h2 { margin-bottom: 20px; }
+.modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
 
-        /* ── Form elements ─────────────────────────────────── */
-        label {
-            display: block;
-            font-size: 13px;
-            font-weight: 600;
-            color: var(--gray-700);
-            margin-bottom: 6px;
-        }
-        input[type="text"], input[type="tel"], select {
-            width: 100%;
-            padding: 10px 14px;
-            border: 1px solid var(--gray-300);
-            border-radius: 8px;
-            font-size: 14px;
-            outline: none;
-            transition: border-color .15s;
-        }
-        input:focus, select:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(79,70,229,.1);
-        }
-        .form-group { margin-bottom: 16px; }
-        .form-row {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 12px;
-        }
+/* Upload zone */
+.upload-zone {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 40px 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: all .2s;
+}
+.upload-zone:hover { border-color: var(--primary); }
+.upload-zone.dragover { border-color: var(--primary); background: rgba(108,92,231,.05); }
+.upload-zone p { color: var(--text-dim); margin-top: 8px; font-size: 14px; }
 
-        /* ── Buttons ───────────────────────────────────────── */
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 10px 20px;
-            border: none;
-            border-radius: 8px;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all .15s;
-        }
-        .btn:disabled { opacity: .5; cursor: not-allowed; }
-        .btn-primary { background: var(--primary); color: white; }
-        .btn-primary:hover:not(:disabled) { background: var(--primary-dark); }
-        .btn-success { background: var(--success); color: white; }
-        .btn-success:hover:not(:disabled) { background: #047857; }
-        .btn-outline {
-            background: white;
-            color: var(--gray-700);
-            border: 1px solid var(--gray-300);
-        }
-        .btn-outline:hover:not(:disabled) { background: var(--gray-50); }
-        .btn-danger { background: var(--danger); color: white; }
-        .btn-danger:hover:not(:disabled) { background: #b91c1c; }
-        .btn-block { width: 100%; justify-content: center; }
+/* Progress bar */
+.progress-bar {
+  height: 8px;
+  background: var(--surface2);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-top: 8px;
+}
+.progress-bar-fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 4px;
+  transition: width .3s;
+}
 
-        /* ── Table ─────────────────────────────────────────── */
-        .table-wrap {
-            overflow-x: auto;
-            margin-top: 12px;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 13px;
-        }
-        th {
-            text-align: left;
-            padding: 10px 12px;
-            background: var(--gray-50);
-            border-bottom: 2px solid var(--gray-200);
-            font-weight: 600;
-            color: var(--gray-700);
-            white-space: nowrap;
-        }
-        td {
-            padding: 10px 12px;
-            border-bottom: 1px solid var(--gray-100);
-            color: var(--gray-700);
-        }
-        tr:hover td { background: var(--gray-50); }
+/* Login page */
+.login-page {
+  display: flex;
+  min-height: 100vh;
+  align-items: center;
+  justify-content: center;
+}
+.login-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 48px;
+  width: 100%;
+  max-width: 440px;
+  text-align: center;
+}
+.login-card h1 { font-size: 28px; margin-bottom: 8px; }
+.login-card p { color: var(--text-dim); margin-bottom: 32px; }
+.login-card .google-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  background: #fff;
+  color: #333;
+  padding: 12px 28px;
+  border-radius: var(--radius-sm);
+  font-size: 15px;
+  font-weight: 600;
+  transition: all .2s;
+  text-decoration: none;
+}
+.login-card .google-btn:hover { box-shadow: 0 4px 12px rgba(0,0,0,.3); }
+.login-card .google-btn svg { width: 20px; height: 20px; }
 
-        /* ── Badges ────────────────────────────────────────── */
-        .badge {
-            display: inline-block;
-            padding: 3px 10px;
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: .3px;
-        }
-        .badge-pending { background: var(--warning-light); color: var(--warning); }
-        .badge-active { background: #dbeafe; color: #2563eb; }
-        .badge-not-looking { background: var(--gray-100); color: var(--gray-500); }
-        .badge-callback { background: #fef3c7; color: #92400e; }
-        .badge-failed { background: var(--danger-light); color: var(--danger); }
-        .badge-qualified { background: var(--success-light); color: var(--success); }
-        .badge-dnc { background: var(--danger-light); color: var(--danger); }
+/* Usage bar */
+.usage-bar-wrap { margin: 16px 0; }
+.usage-info { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 6px; }
+.usage-info .used { color: var(--text); font-weight: 600; }
+.usage-info .limit { color: var(--text-dim); }
 
-        /* ── Toast / Alerts ────────────────────────────────── */
-        .toast-container {
-            position: fixed;
-            top: 80px;
-            right: 24px;
-            z-index: 999;
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-        .toast {
-            padding: 12px 20px;
-            border-radius: 8px;
-            font-size: 14px;
-            font-weight: 500;
-            box-shadow: var(--shadow-lg);
-            animation: slideIn .3s;
-            max-width: 400px;
-        }
-        .toast-success { background: var(--success); color: white; }
-        .toast-error { background: var(--danger); color: white; }
-        .toast-info { background: var(--primary); color: white; }
-        @keyframes slideIn {
-            from { transform: translateX(100%); opacity: 0; }
-            to { transform: translateX(0); opacity: 1; }
-        }
+/* Chart */
+.chart-bar-group { display: flex; align-items: flex-end; gap: 6px; height: 120px; margin: 16px 0; }
+.chart-bar {
+  flex: 1;
+  border-radius: 4px 4px 0 0;
+  position: relative;
+  min-width: 30px;
+}
+.chart-bar .bar-label {
+  position: absolute;
+  bottom: -20px;
+  left: 0; right: 0;
+  text-align: center;
+  font-size: 10px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chart-bar .bar-value {
+  position: absolute;
+  top: -18px;
+  left: 0; right: 0;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+}
 
-        /* ── Log panel ─────────────────────────────────────── */
-        .log-panel {
-            background: var(--gray-900);
-            color: #a5f3a5;
-            border-radius: 8px;
-            padding: 16px;
-            font-family: 'SF Mono', 'Fira Code', monospace;
-            font-size: 12px;
-            max-height: 200px;
-            overflow-y: auto;
-            line-height: 1.8;
-        }
-        .log-panel .log-time { color: var(--gray-500); }
-        .log-panel .log-error { color: #fca5a5; }
-        .log-panel .log-success { color: #6ee7b7; }
+/* Toast */
+.toast-container { position: fixed; bottom: 24px; right: 24px; z-index: 999; }
+.toast {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 20px;
+  margin-top: 8px;
+  font-size: 14px;
+  animation: slideUp .3s ease;
+  max-width: 360px;
+}
+.toast.success { border-left: 3px solid var(--success); }
+.toast.error { border-left: 3px solid var(--danger); }
+.toast.info { border-left: 3px solid var(--info); }
+@keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 
-        /* ── Misc ──────────────────────────────────────────── */
-        .text-muted { color: var(--gray-500); font-size: 13px; }
-        .mt-2 { margin-top: 8px; }
-        .mt-4 { margin-top: 16px; }
-        .mb-4 { margin-bottom: 16px; }
-        .flex-between { display: flex; align-items: center; justify-content: space-between; }
-        .hidden { display: none; }
-
-        .empty-state {
-            text-align: center;
-            padding: 40px;
-            color: var(--gray-500);
-        }
-        .empty-state .icon { font-size: 48px; margin-bottom: 12px; }
-
-        .audio-link {
-            color: var(--primary);
-            text-decoration: none;
-            font-weight: 500;
-        }
-        .audio-link:hover { text-decoration: underline; }
-
-        .section-title {
-            font-size: 14px;
-            font-weight: 600;
-            color: var(--gray-500);
-            text-transform: uppercase;
-            letter-spacing: .5px;
-            margin-bottom: 12px;
-        }
-    </style>
+@media (max-width: 768px) {
+  .sidebar { display: none; }
+  .main-content { margin-left: 0; padding: 16px; }
+  .stats-grid { grid-template-columns: 1fr 1fr; }
+  .campaigns-grid { grid-template-columns: 1fr; }
+}
+</style>
 </head>
 <body>
 
-<!-- Navbar -->
-<nav class="navbar">
-    <h1><span>📞</span> AI Recruitment Caller</h1>
-    <div class="nav-status">
-        <div class="status-dot" id="statusDot"></div>
-        <span id="serverStatus">Connected</span>
+<!-- LOGIN PAGE -->
+<div id="loginPage" class="login-page">
+  <div class="login-card">
+    <div style="font-size:48px;margin-bottom:12px">🤖</div>
+    <h1>RecruitAI</h1>
+    <p>AI-powered recruitment caller for HR teams.<br>Screen candidates automatically with voice AI.</p>
+    <a href="/auth/login" class="google-btn">
+      <svg viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+      Continue with Google
+    </a>
+    <div style="margin-top:32px;color:var(--text-dim);font-size:13px">
+      Free plan: 50 AI calls/month<br>
+      Pro plan: 500 calls/month &mdash; $49/mo
     </div>
-</nav>
-
-<!-- Toast container -->
-<div class="toast-container" id="toastContainer"></div>
-
-<div class="container">
-
-    <!-- Stats -->
-    <div class="stats-grid" id="statsGrid">
-        <div class="stat-card">
-            <div class="stat-label">Total Records</div>
-            <div class="stat-value" id="statTotal">0</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-label">Calls Made</div>
-            <div class="stat-value active" id="statCalls">0</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-label">Pending</div>
-            <div class="stat-value warning" id="statPending">0</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-label">Calling Active</div>
-            <div class="stat-value success" id="statActive">No</div>
-        </div>
-    </div>
-
-    <!-- Main two-column -->
-    <div class="two-col">
-
-        <!-- Left: Upload + Controls -->
-        <div>
-            <!-- Upload CSV -->
-            <div class="card">
-                <div class="card-header">
-                    <span class="card-title">📁 Upload Candidates CSV</span>
-                </div>
-                <div class="upload-zone" id="uploadZone" onclick="document.getElementById('csvFile').click()">
-                    <div class="upload-icon">📄</div>
-                    <div class="upload-text">Drop CSV file here or click to browse</div>
-                    <div class="upload-filename hidden" id="fileName"></div>
-                </div>
-                <input type="file" id="csvFile" accept=".csv" style="display:none">
-
-                <div class="form-group mt-4">
-                    <label for="jobRole">Job Role</label>
-                    <input type="text" id="jobRole" placeholder="e.g. Software Engineer, Data Analyst">
-                </div>
-
-                <button class="btn btn-primary btn-block" id="uploadBtn" disabled onclick="uploadCSV()">
-                    ⬆️ Upload CSV
-                </button>
-            </div>
-
-            <!-- Call Controls -->
-            <div class="card">
-                <div class="card-header">
-                    <span class="card-title">📞 Call Controls</span>
-                </div>
-                <button class="btn btn-success btn-block mb-4" id="startCallsBtn" onclick="startCalls()">
-                    ▶️ Start Calling
-                </button>
-                <div class="form-row">
-                    <button class="btn btn-outline btn-block" onclick="refreshStatus()">
-                        🔄 Refresh Status
-                    </button>
-                    <button class="btn btn-outline btn-block" onclick="exportReport()">
-                        📥 Download Report
-                    </button>
-                </div>
-            </div>
-
-            <!-- Quick Test Call -->
-            <div class="card">
-                <div class="card-header">
-                    <span class="card-title">🧪 Quick Test Call</span>
-                </div>
-                <div class="form-group">
-                    <label for="testPhone">Phone Number (international format)</label>
-                    <input type="tel" id="testPhone" placeholder="+971585371270">
-                </div>
-                <div class="form-group">
-                    <label for="testName">Name</label>
-                    <input type="text" id="testName" placeholder="John">
-                </div>
-                <button class="btn btn-primary btn-block" onclick="testCall()">
-                    📞 Place Test Call
-                </button>
-            </div>
-        </div>
-
-        <!-- Right: Results + Log -->
-        <div>
-            <!-- Disposition Breakdown -->
-            <div class="card">
-                <div class="card-header">
-                    <span class="card-title">📊 Disposition Breakdown</span>
-                </div>
-                <div id="dispositionBreakdown">
-                    <div class="empty-state">
-                        <div class="icon">📊</div>
-                        No call data yet
-                    </div>
-                </div>
-            </div>
-
-            <!-- Activity Log -->
-            <div class="card">
-                <div class="card-header">
-                    <span class="card-title">📋 Activity Log</span>
-                    <button class="btn btn-outline" style="padding:6px 12px; font-size:12px" onclick="clearLog()">Clear</button>
-                </div>
-                <div class="log-panel" id="logPanel">
-                    <div><span class="log-time">[--:--:--]</span> Dashboard loaded. Waiting for activity...</div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Call Records Table -->
-    <div class="card mt-4">
-        <div class="card-header">
-            <span class="card-title">📋 Call Records</span>
-            <button class="btn btn-outline" style="padding:6px 12px; font-size:12px" onclick="refreshStatus()">🔄 Refresh</button>
-        </div>
-        <div class="table-wrap">
-            <table id="recordsTable">
-                <thead>
-                    <tr>
-                        <th>Name</th>
-                        <th>Phone</th>
-                        <th>Job Role</th>
-                        <th>Status</th>
-                        <th>Summary</th>
-                        <th>Recording</th>
-                    </tr>
-                </thead>
-                <tbody id="recordsBody">
-                    <tr><td colspan="6" class="empty-state"><div class="icon">📭</div>No records yet. Upload a CSV to get started.</td></tr>
-                </tbody>
-            </table>
-        </div>
-    </div>
-
+  </div>
 </div>
 
+<!-- MAIN APP -->
+<div id="appContainer" class="app-container" style="display:none">
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <span class="logo">🤖</span>
+      <h1>RecruitAI</h1>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-item active" data-page="dashboard" onclick="showPage('dashboard')">
+        <span>📊</span> Dashboard
+      </div>
+      <div class="nav-item" data-page="campaigns" onclick="showPage('campaigns')">
+        <span>📋</span> Campaigns
+      </div>
+      <div class="nav-item" data-page="billing" onclick="showPage('billing')">
+        <span>💳</span> Billing
+      </div>
+      <div class="nav-item" data-page="settings" onclick="showPage('settings')">
+        <span>⚙️</span> Settings
+      </div>
+    </nav>
+    <div class="sidebar-user">
+      <img id="userAvatar" src="" alt="avatar">
+      <div class="user-info">
+        <div class="user-name" id="userName">User</div>
+        <div class="user-plan" id="userPlan">Free</div>
+      </div>
+      <a href="/auth/logout" title="Logout" style="color:var(--text-dim);font-size:18px">↗</a>
+    </div>
+  </aside>
+
+  <main class="main-content">
+
+    <!-- Dashboard Page -->
+    <div class="page active" id="page-dashboard">
+      <h2 style="margin-bottom:20px">Dashboard</h2>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-label">Campaigns</div>
+          <div class="stat-value" id="statCampaigns">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Total Candidates</div>
+          <div class="stat-value" id="statCandidates">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Calls This Month</div>
+          <div class="stat-value" id="statCalls">0</div>
+          <div class="stat-sub" id="statCallsSub">of 50 limit</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Active Looking</div>
+          <div class="stat-value" style="color:var(--success)" id="statActiveLooking">0</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Monthly Usage</div>
+        <div class="usage-bar-wrap">
+          <div class="usage-info">
+            <span class="used" id="usageUsed">0 calls used</span>
+            <span class="limit" id="usageLimit">50 call limit</span>
+          </div>
+          <div class="progress-bar">
+            <div class="progress-bar-fill" id="usageBar" style="width:0%"></div>
+          </div>
+        </div>
+        <div id="usageUpgrade" style="margin-top:12px;display:none">
+          <button class="btn btn-primary btn-sm" onclick="upgradeToPro()">⚡ Upgrade to Pro — $49/mo</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Disposition Breakdown</div>
+        <div class="chart-bar-group" id="dispositionChart"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Recent Campaigns</div>
+        <div id="recentCampaigns" style="color:var(--text-dim)">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Campaigns Page -->
+    <div class="page" id="page-campaigns">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+        <h2>Campaigns</h2>
+        <button class="btn btn-primary" onclick="openNewCampaignModal()">+ New Campaign</button>
+      </div>
+      <div id="campaignsList" class="campaigns-grid">
+        <p style="color:var(--text-dim)">Loading...</p>
+      </div>
+    </div>
+
+    <!-- Campaign Detail Page -->
+    <div class="page" id="page-campaign-detail">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px">
+        <button class="btn btn-outline btn-sm" onclick="showPage('campaigns')">← Back</button>
+        <h2 id="campaignDetailName">Campaign</h2>
+        <span class="campaign-status" id="campaignDetailStatus">draft</span>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-label">Total Candidates</div>
+          <div class="stat-value" id="cdTotal">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Called</div>
+          <div class="stat-value" id="cdCalled">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Pending</div>
+          <div class="stat-value" id="cdPending">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Job Role</div>
+          <div class="stat-value" style="font-size:16px" id="cdJobRole">—</div>
+        </div>
+      </div>
+
+      <div class="card" style="display:flex;flex-wrap:wrap;gap:12px;align-items:center">
+        <button class="btn btn-primary" id="btnUploadCSV" onclick="document.getElementById('csvFileInput').click()">📁 Upload CSV</button>
+        <input type="file" id="csvFileInput" accept=".csv" style="display:none" onchange="uploadCSV(this)">
+        <button class="btn btn-success" id="btnStartCalls" onclick="startCampaignCalls()">📞 Start Calls</button>
+        <button class="btn btn-outline" onclick="refreshCampaignDetail()">🔄 Refresh</button>
+        <button class="btn btn-outline" onclick="exportCampaign()">📥 Export CSV</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteCampaign()" style="margin-left:auto">🗑 Delete</button>
+      </div>
+
+      <div class="card" id="uploadZoneCard">
+        <div class="upload-zone" id="uploadZone"
+             ondragover="event.preventDefault();this.classList.add('dragover')"
+             ondragleave="this.classList.remove('dragover')"
+             ondrop="handleDrop(event)">
+          <div style="font-size:32px">📂</div>
+          <p>Drag & drop a CSV file here, or click "Upload CSV" above</p>
+          <p style="font-size:12px;margin-top:8px">Required column: phone. Optional: first_name, last_name, email</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Disposition Breakdown</div>
+        <div class="chart-bar-group" id="cdDispositionChart"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Candidates</div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Phone</th>
+                <th>Status</th>
+                <th>Summary</th>
+                <th>Location</th>
+                <th>Attempts</th>
+              </tr>
+            </thead>
+            <tbody id="candidatesTable"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Billing Page -->
+    <div class="page" id="page-billing">
+      <h2 style="margin-bottom:20px">Billing</h2>
+
+      <div class="stats-grid" style="grid-template-columns:1fr 1fr">
+        <div class="card" id="billingFreeCard" style="position:relative">
+          <div style="font-size:14px;font-weight:700;color:var(--text-dim);text-transform:uppercase;margin-bottom:8px">Free Plan</div>
+          <div style="font-size:36px;font-weight:800">$0<span style="font-size:16px;color:var(--text-dim)">/mo</span></div>
+          <ul style="list-style:none;margin:16px 0;line-height:2;font-size:14px;color:var(--text-dim)">
+            <li>✓ 50 AI calls/month</li>
+            <li>✓ Unlimited campaigns</li>
+            <li>✓ CSV export</li>
+            <li>✓ Call recordings</li>
+          </ul>
+          <div id="billingFreeCurrent" style="display:none">
+            <span class="badge badge-active">Current Plan</span>
+          </div>
+        </div>
+        <div class="card" style="border-color:var(--primary);position:relative">
+          <div style="position:absolute;top:-1px;right:20px;background:var(--primary);color:#fff;padding:4px 12px;border-radius:0 0 8px 8px;font-size:11px;font-weight:700">POPULAR</div>
+          <div style="font-size:14px;font-weight:700;color:var(--primary);text-transform:uppercase;margin-bottom:8px">Pro Plan</div>
+          <div style="font-size:36px;font-weight:800">$49<span style="font-size:16px;color:var(--text-dim)">/mo</span></div>
+          <ul style="list-style:none;margin:16px 0;line-height:2;font-size:14px;color:var(--text-dim)">
+            <li>✓ 500 AI calls/month</li>
+            <li>✓ Unlimited campaigns</li>
+            <li>✓ CSV export</li>
+            <li>✓ Call recordings</li>
+            <li>✓ Priority support</li>
+          </ul>
+          <div id="billingProAction">
+            <button class="btn btn-primary btn-lg" onclick="upgradeToPro()">⚡ Upgrade to Pro</button>
+          </div>
+          <div id="billingProCurrent" style="display:none">
+            <span class="badge badge-active">Current Plan</span>
+            <button class="btn btn-outline btn-sm" style="margin-left:12px" onclick="manageBilling()">Manage Subscription</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Monthly Usage</div>
+        <div class="usage-bar-wrap">
+          <div class="usage-info">
+            <span class="used" id="billingUsed">0 calls</span>
+            <span class="limit" id="billingLimit">50 limit</span>
+          </div>
+          <div class="progress-bar">
+            <div class="progress-bar-fill" id="billingBar" style="width:0%"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Settings Page -->
+    <div class="page" id="page-settings">
+      <h2 style="margin-bottom:20px">Settings</h2>
+      <div class="card">
+        <div class="card-title">Account</div>
+        <div class="form-group">
+          <label>Email</label>
+          <input type="email" id="settingsEmail" readonly>
+        </div>
+        <div class="form-group">
+          <label>Name</label>
+          <input type="text" id="settingsName" readonly>
+        </div>
+        <div style="margin-top:16px">
+          <a href="/auth/logout" class="btn btn-outline">Logout</a>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Quick Test Call</div>
+        <p style="color:var(--text-dim);margin-bottom:12px;font-size:14px">Test the AI caller with a single phone number.</p>
+        <div style="display:flex;gap:10px;align-items:flex-end">
+          <div style="flex:1">
+            <label>Phone Number (E.164)</label>
+            <input type="tel" id="testPhone" placeholder="+1234567890">
+          </div>
+          <div style="flex:1">
+            <label>Name</label>
+            <input type="text" id="testName" placeholder="Test User">
+          </div>
+          <button class="btn btn-primary" onclick="makeTestCall()">📞 Call</button>
+        </div>
+        <div id="testCallResult" style="margin-top:12px;font-size:13px"></div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- New Campaign Modal -->
+<div class="modal-overlay" id="newCampaignModal">
+  <div class="modal">
+    <h2>New Campaign</h2>
+    <div class="form-group">
+      <label>Campaign Name</label>
+      <input type="text" id="ncName" placeholder="e.g., Senior React Developers — January">
+    </div>
+    <div class="form-group">
+      <label>Job Role</label>
+      <input type="text" id="ncJobRole" placeholder="e.g., Senior React Developer">
+    </div>
+    <div class="form-group">
+      <label>Description (optional)</label>
+      <textarea id="ncDescription" rows="3" placeholder="Brief description of the role..."></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeNewCampaignModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="createCampaign()">Create Campaign</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast-container" id="toastContainer"></div>
+
 <script>
-    const API = '';  // Same origin
+/* STATE */
+let currentUser = null;
+let currentCampaignId = null;
+let campaigns = [];
 
-    // ── Toast notifications ──────────────────────────────
-    function toast(msg, type = 'info') {
-        const el = document.createElement('div');
-        el.className = `toast toast-${type}`;
-        el.textContent = msg;
-        document.getElementById('toastContainer').appendChild(el);
-        setTimeout(() => el.remove(), 4000);
+/* INIT */
+document.addEventListener('DOMContentLoaded', async () => {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('billing') === 'success') toast('Upgrade successful! Welcome to Pro.', 'success');
+  if (params.get('billing') === 'cancelled') toast('Upgrade cancelled.', 'info');
+  window.history.replaceState({}, '', '/');
+  await checkAuth();
+});
+
+async function checkAuth() {
+  try {
+    const resp = await fetch('/auth/me');
+    const data = await resp.json();
+    if (data.authenticated) {
+      currentUser = data.user;
+      showApp();
+      loadDashboard();
+    } else {
+      showLogin();
     }
+  } catch {
+    showLogin();
+  }
+}
 
-    // ── Activity log ─────────────────────────────────────
-    function addLog(msg, type = '') {
-        const panel = document.getElementById('logPanel');
-        const now = new Date().toLocaleTimeString();
-        const cls = type === 'error' ? 'log-error' : type === 'success' ? 'log-success' : '';
-        panel.innerHTML += `<div class="${cls}"><span class="log-time">[${now}]</span> ${msg}</div>`;
-        panel.scrollTop = panel.scrollHeight;
+function showLogin() {
+  document.getElementById('loginPage').style.display = 'flex';
+  document.getElementById('appContainer').style.display = 'none';
+}
+
+function showApp() {
+  document.getElementById('loginPage').style.display = 'none';
+  document.getElementById('appContainer').style.display = 'flex';
+  document.getElementById('userName').textContent = currentUser.name || currentUser.email;
+  document.getElementById('userPlan').textContent = currentUser.plan + ' plan';
+  document.getElementById('userAvatar').src = currentUser.avatar_url ||
+    'https://ui-avatars.com/api/?name=' + encodeURIComponent(currentUser.name||'U') + '&background=6c5ce7&color=fff';
+  document.getElementById('settingsEmail').value = currentUser.email;
+  document.getElementById('settingsName').value = currentUser.name || '';
+}
+
+/* NAVIGATION */
+function showPage(page) {
+  document.querySelectorAll('.page').forEach(function(p){ p.classList.remove('active'); });
+  document.querySelectorAll('.nav-item').forEach(function(n){ n.classList.remove('active'); });
+  var target = document.getElementById('page-' + page);
+  if (target) target.classList.add('active');
+  var nav = document.querySelector('.nav-item[data-page="' + page + '"]');
+  if (nav) nav.classList.add('active');
+  if (page === 'dashboard') loadDashboard();
+  if (page === 'campaigns') loadCampaigns();
+  if (page === 'billing') loadBilling();
+}
+
+/* DASHBOARD */
+async function loadDashboard() {
+  try {
+    var resp = await fetch('/api/stats');
+    var data = await resp.json();
+    document.getElementById('statCampaigns').textContent = data.campaigns || 0;
+    document.getElementById('statCandidates').textContent = data.total_candidates || 0;
+    document.getElementById('statCalls').textContent = data.calls_this_month || 0;
+    document.getElementById('statCallsSub').textContent = 'of ' + (data.monthly_limit || 50) + ' limit';
+    document.getElementById('statActiveLooking').textContent = (data.by_status || {})['ACTIVE_LOOKING'] || 0;
+
+    var used = data.calls_this_month || 0;
+    var limit = data.monthly_limit || 50;
+    var pct = Math.min((used / limit) * 100, 100);
+    document.getElementById('usageUsed').textContent = used + ' calls used';
+    document.getElementById('usageLimit').textContent = limit + ' call limit';
+    document.getElementById('usageBar').style.width = pct + '%';
+    document.getElementById('usageBar').style.background = pct > 80 ? 'var(--danger)' : 'var(--primary)';
+    document.getElementById('usageUpgrade').style.display = currentUser.plan === 'free' ? 'block' : 'none';
+
+    renderDispositionChart('dispositionChart', data.by_status || {});
+
+    var cResp = await fetch('/api/campaigns');
+    var cData = await cResp.json();
+    var recent = (cData.campaigns || []).slice(0, 3);
+    var container = document.getElementById('recentCampaigns');
+    if (recent.length === 0) {
+      container.innerHTML = '<p style="color:var(--text-dim)">No campaigns yet. Create one to get started!</p>';
+    } else {
+      container.innerHTML = recent.map(function(c) {
+        return '<div class="campaign-card" onclick="openCampaign(' + c.id + ')" style="margin-bottom:10px">' +
+          '<div class="campaign-card-header"><h3>' + esc(c.name) + '</h3><span class="campaign-status ' + c.status + '">' + c.status + '</span></div>' +
+          '<div class="campaign-meta">Role: <strong>' + esc(c.job_role) + '</strong></div>' +
+          '<div class="campaign-stats-row"><span>Candidates: <strong>' + (c.candidate_count||0) + '</strong></span><span>Called: <strong>' + (c.called_count||0) + '</strong></span></div></div>';
+      }).join('');
     }
+  } catch (err) {
+    console.error('Dashboard load failed:', err);
+  }
+}
 
-    function clearLog() {
-        document.getElementById('logPanel').innerHTML = '';
-    }
+/* CAMPAIGNS */
+async function loadCampaigns() {
+  var resp = await fetch('/api/campaigns');
+  var data = await resp.json();
+  campaigns = data.campaigns || [];
+  var container = document.getElementById('campaignsList');
+  if (campaigns.length === 0) {
+    container.innerHTML = '<div class="card" style="text-align:center;padding:48px">' +
+      '<div style="font-size:48px;margin-bottom:12px">📋</div><h3>No campaigns yet</h3>' +
+      '<p style="color:var(--text-dim);margin:12px 0">Create your first campaign to start screening candidates.</p>' +
+      '<button class="btn btn-primary" onclick="openNewCampaignModal()">+ New Campaign</button></div>';
+    return;
+  }
+  container.innerHTML = campaigns.map(function(c) {
+    return '<div class="campaign-card" onclick="openCampaign(' + c.id + ')">' +
+      '<div class="campaign-card-header"><h3>' + esc(c.name) + '</h3><span class="campaign-status ' + c.status + '">' + c.status + '</span></div>' +
+      '<div class="campaign-meta">Role: <strong>' + esc(c.job_role) + '</strong></div>' +
+      '<div class="campaign-stats-row"><span>Candidates: <strong>' + (c.candidate_count||c.total_candidates||0) + '</strong></span>' +
+      '<span>Called: <strong>' + (c.called_count||c.total_called||0) + '</strong></span></div>' +
+      '<div style="font-size:12px;color:var(--text-dim);margin-top:8px">Created: ' + new Date(c.created_at).toLocaleDateString() + '</div></div>';
+  }).join('');
+}
 
-    // ── File upload handling ─────────────────────────────
-    const fileInput = document.getElementById('csvFile');
-    const uploadZone = document.getElementById('uploadZone');
-    const uploadBtn = document.getElementById('uploadBtn');
+function openNewCampaignModal() {
+  document.getElementById('newCampaignModal').classList.add('active');
+  document.getElementById('ncName').value = '';
+  document.getElementById('ncJobRole').value = '';
+  document.getElementById('ncDescription').value = '';
+  document.getElementById('ncName').focus();
+}
+function closeNewCampaignModal() {
+  document.getElementById('newCampaignModal').classList.remove('active');
+}
 
-    fileInput.addEventListener('change', (e) => {
-        const file = e.target.files[0];
-        if (file) {
-            document.getElementById('fileName').textContent = `✅ ${file.name} (${(file.size/1024).toFixed(1)} KB)`;
-            document.getElementById('fileName').classList.remove('hidden');
-            uploadZone.classList.add('has-file');
-            uploadBtn.disabled = false;
-            addLog(`File selected: ${file.name}`, 'success');
-        }
+async function createCampaign() {
+  var name = document.getElementById('ncName').value.trim();
+  var jobRole = document.getElementById('ncJobRole').value.trim();
+  var description = document.getElementById('ncDescription').value.trim();
+  if (!name || !jobRole) { toast('Name and Job Role are required', 'error'); return; }
+  try {
+    var resp = await fetch('/api/campaigns', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name, job_role: jobRole, description: description})
     });
+    if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed');
+    var data = await resp.json();
+    closeNewCampaignModal();
+    toast('Campaign created!', 'success');
+    openCampaign(data.campaign.id);
+  } catch (err) { toast(err.message, 'error'); }
+}
 
-    // Drag & drop
-    uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); uploadZone.classList.add('dragover'); });
-    uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
-    uploadZone.addEventListener('drop', (e) => {
-        e.preventDefault();
-        uploadZone.classList.remove('dragover');
-        const file = e.dataTransfer.files[0];
-        if (file && file.name.endsWith('.csv')) {
-            fileInput.files = e.dataTransfer.files;
-            fileInput.dispatchEvent(new Event('change'));
-        } else {
-            toast('Please drop a CSV file', 'error');
-        }
+/* CAMPAIGN DETAIL */
+async function openCampaign(campaignId) {
+  currentCampaignId = campaignId;
+  showPage('campaign-detail');
+  document.querySelectorAll('.nav-item').forEach(function(n){ n.classList.remove('active'); });
+  document.querySelector('.nav-item[data-page="campaigns"]').classList.add('active');
+  await refreshCampaignDetail();
+}
+
+async function refreshCampaignDetail() {
+  if (!currentCampaignId) return;
+  try {
+    var results = await Promise.all([
+      fetch('/api/campaigns/' + currentCampaignId + '/status'),
+      fetch('/api/campaigns/' + currentCampaignId + '/candidates')
+    ]);
+    var statusData = await results[0].json();
+    var candidatesData = await results[1].json();
+
+    var campaign = statusData.campaign;
+    var stats = statusData.stats;
+    var candidates = candidatesData.candidates || [];
+
+    document.getElementById('campaignDetailName').textContent = campaign.name;
+    document.getElementById('campaignDetailStatus').textContent = campaign.status;
+    document.getElementById('campaignDetailStatus').className = 'campaign-status ' + campaign.status;
+    document.getElementById('cdTotal').textContent = stats.total || 0;
+    document.getElementById('cdCalled').textContent = stats.called || 0;
+    document.getElementById('cdPending').textContent = stats.pending || 0;
+    document.getElementById('cdJobRole').textContent = campaign.job_role;
+
+    if (statusData.calling_active) {
+      document.getElementById('btnStartCalls').textContent = '⏳ Calling in progress...';
+      document.getElementById('btnStartCalls').disabled = true;
+    } else {
+      document.getElementById('btnStartCalls').textContent = '📞 Start Calls';
+      document.getElementById('btnStartCalls').disabled = false;
+    }
+
+    renderDispositionChart('cdDispositionChart', stats.by_status || {});
+
+    var tbody = document.getElementById('candidatesTable');
+    if (candidates.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-dim);padding:32px">No candidates yet. Upload a CSV to get started.</td></tr>';
+    } else {
+      tbody.innerHTML = candidates.map(function(c) {
+        return '<tr><td>' + esc(c.first_name||'') + ' ' + esc(c.last_name||'') + '</td>' +
+          '<td style="font-family:monospace;font-size:12px">' + esc(c.phone_e164) + '</td>' +
+          '<td><span class="badge badge-' + (c.status||'pending').toLowerCase() + '">' + (c.status||'PENDING') + '</span></td>' +
+          '<td style="max-width:300px;font-size:12px">' + esc(c.short_summary||'—') + '</td>' +
+          '<td style="font-size:12px">' + esc(c.extracted_location||'—') + '</td>' +
+          '<td>' + (c.attempt_count||0) + '</td></tr>';
+      }).join('');
+    }
+  } catch (err) { toast('Failed to load campaign: ' + err.message, 'error'); }
+}
+
+/* Upload CSV */
+function handleDrop(e) {
+  e.preventDefault();
+  e.target.closest('.upload-zone').classList.remove('dragover');
+  var file = e.dataTransfer.files[0];
+  if (file) uploadCSVFile(file);
+}
+function uploadCSV(input) {
+  var file = input.files[0];
+  if (file) uploadCSVFile(file);
+  input.value = '';
+}
+async function uploadCSVFile(file) {
+  if (!currentCampaignId) return;
+  if (!file.name.endsWith('.csv')) { toast('Please upload a .csv file', 'error'); return; }
+  var formData = new FormData();
+  formData.append('file', file);
+  try {
+    toast('Uploading...', 'info');
+    var resp = await fetch('/api/campaigns/' + currentCampaignId + '/upload', { method: 'POST', body: formData });
+    var data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || 'Upload failed');
+    toast('Uploaded ' + data.valid_records + ' candidates (' + data.rejected_records + ' rejected)', 'success');
+    refreshCampaignDetail();
+  } catch (err) { toast(err.message, 'error'); }
+}
+
+/* Start calls */
+async function startCampaignCalls() {
+  if (!currentCampaignId) return;
+  try {
+    var resp = await fetch('/api/campaigns/' + currentCampaignId + '/start', { method: 'POST' });
+    var data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || 'Failed to start calls');
+    toast(data.message || 'Calls started!', 'success');
+    document.getElementById('btnStartCalls').textContent = '⏳ Calling...';
+    document.getElementById('btnStartCalls').disabled = true;
+    var interval = setInterval(async function() {
+      await refreshCampaignDetail();
+      var resp2 = await fetch('/api/campaigns/' + currentCampaignId + '/status');
+      var data2 = await resp2.json();
+      if (!data2.calling_active) {
+        clearInterval(interval);
+        toast('All calls completed!', 'success');
+      }
+    }, 10000);
+  } catch (err) { toast(err.message, 'error'); }
+}
+
+/* Export */
+function exportCampaign() {
+  if (!currentCampaignId) return;
+  window.open('/api/campaigns/' + currentCampaignId + '/export', '_blank');
+}
+
+/* Delete */
+async function deleteCampaign() {
+  if (!currentCampaignId) return;
+  if (!confirm('Delete this campaign and all its candidates? This cannot be undone.')) return;
+  try {
+    var resp = await fetch('/api/campaigns/' + currentCampaignId, { method: 'DELETE' });
+    if (!resp.ok) throw new Error('Delete failed');
+    toast('Campaign deleted', 'success');
+    currentCampaignId = null;
+    showPage('campaigns');
+  } catch (err) { toast(err.message, 'error'); }
+}
+
+/* BILLING */
+function loadBilling() {
+  if (!currentUser) return;
+  var isPro = currentUser.plan === 'pro';
+  document.getElementById('billingFreeCurrent').style.display = isPro ? 'none' : 'block';
+  document.getElementById('billingProAction').style.display = isPro ? 'none' : 'block';
+  document.getElementById('billingProCurrent').style.display = isPro ? 'block' : 'none';
+  var used = currentUser.calls_this_month || 0;
+  var limit = currentUser.monthly_limit || 50;
+  var pct = Math.min((used / limit) * 100, 100);
+  document.getElementById('billingUsed').textContent = used + ' calls';
+  document.getElementById('billingLimit').textContent = limit + ' limit';
+  document.getElementById('billingBar').style.width = pct + '%';
+}
+
+async function upgradeToPro() {
+  try {
+    var resp = await fetch('/api/billing/checkout', { method: 'POST' });
+    var data = await resp.json();
+    if (data.url) window.location.href = data.url;
+    else toast('Could not create checkout session', 'error');
+  } catch (err) { toast(err.message, 'error'); }
+}
+
+async function manageBilling() {
+  try {
+    var resp = await fetch('/api/billing/portal', { method: 'POST' });
+    var data = await resp.json();
+    if (data.url) window.location.href = data.url;
+    else toast('Could not open billing portal', 'error');
+  } catch (err) { toast(err.message, 'error'); }
+}
+
+/* TEST CALL */
+async function makeTestCall() {
+  var phone = document.getElementById('testPhone').value.trim();
+  var name = document.getElementById('testName').value.trim() || 'Test';
+  if (!phone) { toast('Enter a phone number', 'error'); return; }
+  var result = document.getElementById('testCallResult');
+  result.innerHTML = '⏳ Placing call...';
+  try {
+    var resp = await fetch('/api/test-call', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ phone: phone, name: name })
     });
-
-    // ── Upload CSV ───────────────────────────────────────
-    async function uploadCSV() {
-        const file = fileInput.files[0];
-        if (!file) return toast('No file selected', 'error');
-
-        const jobRole = document.getElementById('jobRole').value;
-        const form = new FormData();
-        form.append('file', file);
-        form.append('job_role', jobRole);
-
-        uploadBtn.disabled = true;
-        uploadBtn.textContent = '⏳ Uploading...';
-        addLog(`Uploading ${file.name}...`);
-
-        try {
-            const resp = await fetch(`${API}/upload-csv`, { method: 'POST', body: form });
-            const data = await resp.json();
-
-            if (resp.ok) {
-                toast(`✅ ${data.valid_records} candidates uploaded`, 'success');
-                addLog(`Upload complete: ${data.valid_records} valid, ${data.rejected_records} rejected`, 'success');
-
-                if (data.rejected_records > 0) {
-                    addLog(`Rejected: ${data.rejected_details.map(r => `Row ${r.row}: ${r.reason}`).join(', ')}`, 'error');
-                }
-            } else {
-                toast(`❌ ${data.detail || 'Upload failed'}`, 'error');
-                addLog(`Upload error: ${data.detail}`, 'error');
-            }
-        } catch (e) {
-            toast('Upload failed — server error', 'error');
-            addLog(`Upload error: ${e.message}`, 'error');
-        }
-
-        uploadBtn.disabled = false;
-        uploadBtn.textContent = '⬆️ Upload CSV';
-        refreshStatus();
+    var data = await resp.json();
+    if (data.status === 'ok') {
+      result.innerHTML = '<span style="color:var(--success)">✓ Call placed! ID: ' + (data.vapi_response && data.vapi_response.id || 'unknown') + '</span>';
+    } else {
+      result.innerHTML = '<span style="color:var(--danger)">✗ ' + (data.error || 'Failed') + '</span>';
     }
+  } catch (err) {
+    result.innerHTML = '<span style="color:var(--danger)">✗ ' + err.message + '</span>';
+  }
+}
 
-    // ── Start Calls ──────────────────────────────────────
-    async function startCalls() {
-        const btn = document.getElementById('startCallsBtn');
-        btn.disabled = true;
-        btn.textContent = '⏳ Starting...';
-        addLog('Starting outbound calls...');
+/* CHART */
+var DISPOSITION_COLORS = {
+  PENDING: '#fdcb6e', ACTIVE_LOOKING: '#00b894', NOT_LOOKING: '#e17055',
+  CALL_BACK: '#74b9ff', WRONG_NUMBER: '#d63031', DNC: '#636e72',
+  QUALIFIED: '#00cec9', NOT_QUALIFIED: '#e17055', PARTIALLY_QUALIFIED: '#ffeaa7',
+  NO_ANSWER: '#b2bec3', BUSY: '#dfe6e9', VOICEMAIL: '#a29bfe', FAILED: '#636e72'
+};
 
-        try {
-            const resp = await fetch(`${API}/start-calls`, { method: 'POST' });
-            const data = await resp.json();
+function renderDispositionChart(containerId, byStatus) {
+  var container = document.getElementById(containerId);
+  if (!container) return;
+  var entries = Object.entries(byStatus).filter(function(e){ return e[1] > 0; });
+  if (entries.length === 0) {
+    container.innerHTML = '<p style="color:var(--text-dim);font-size:13px;text-align:center">No data yet</p>';
+    container.style.height = 'auto';
+    return;
+  }
+  var maxVal = Math.max.apply(null, entries.map(function(e){ return e[1]; }));
+  container.style.height = '140px';
+  container.style.paddingBottom = '24px';
+  container.innerHTML = entries.map(function(e) {
+    var status = e[0], count = e[1];
+    var pct = (count / maxVal) * 100;
+    var color = DISPOSITION_COLORS[status] || '#6c5ce7';
+    return '<div class="chart-bar" style="height:' + pct + '%;background:' + color + '">' +
+      '<span class="bar-value" style="color:' + color + '">' + count + '</span>' +
+      '<span class="bar-label">' + status.replace(/_/g, ' ') + '</span></div>';
+  }).join('');
+}
 
-            if (data.status === 'started') {
-                toast(`📞 Calls started (Run: ${data.run_id})`, 'success');
-                addLog(`Calling batch started. Run ID: ${data.run_id}`, 'success');
-                // Auto-refresh every 5 seconds while calls are active
-                startAutoRefresh();
-            } else if (data.status === 'already_running') {
-                toast('Calls already in progress', 'info');
-                addLog('Calling batch already running', '');
-            } else {
-                toast(data.detail || data.message || 'Error starting calls', 'error');
-                addLog(`Error: ${data.detail || data.message}`, 'error');
-            }
-        } catch (e) {
-            toast('Failed to start calls', 'error');
-            addLog(`Error: ${e.message}`, 'error');
-        }
+/* UTILS */
+function esc(str) {
+  var d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
 
-        btn.disabled = false;
-        btn.textContent = '▶️ Start Calling';
-    }
+function toast(msg, type) {
+  type = type || 'info';
+  var container = document.getElementById('toastContainer');
+  var el = document.createElement('div');
+  el.className = 'toast ' + type;
+  el.textContent = msg;
+  container.appendChild(el);
+  setTimeout(function(){ el.remove(); }, 4000);
+}
 
-    // ── Refresh Status ───────────────────────────────────
-    let autoRefreshInterval = null;
-
-    function startAutoRefresh() {
-        if (autoRefreshInterval) return;
-        autoRefreshInterval = setInterval(refreshStatus, 5000);
-        addLog('Auto-refresh enabled (every 5s)');
-    }
-
-    function stopAutoRefresh() {
-        if (autoRefreshInterval) {
-            clearInterval(autoRefreshInterval);
-            autoRefreshInterval = null;
-        }
-    }
-
-    async function refreshStatus() {
-        try {
-            const resp = await fetch(`${API}/status`);
-            const data = await resp.json();
-
-            document.getElementById('statTotal').textContent = data.total_records || 0;
-            document.getElementById('statCalls').textContent = data.records_with_calls || 0;
-            document.getElementById('statPending').textContent = data.by_status?.PENDING || 0;
-
-            const isActive = data.calling_active;
-            document.getElementById('statActive').textContent = isActive ? 'Yes' : 'No';
-            document.getElementById('statActive').className = `stat-value ${isActive ? 'success' : ''}`;
-
-            if (!isActive && autoRefreshInterval) {
-                stopAutoRefresh();
-                addLog('Calling complete. Auto-refresh stopped.', 'success');
-            }
-
-            // Disposition breakdown
-            renderDispositions(data.by_status || {});
-
-            // Also fetch records for the table
-            await fetchRecords();
-
-        } catch (e) {
-            document.getElementById('serverStatus').textContent = 'Disconnected';
-            document.getElementById('statusDot').style.background = '#dc2626';
-        }
-    }
-
-    function renderDispositions(byStatus) {
-        const container = document.getElementById('dispositionBreakdown');
-        const entries = Object.entries(byStatus);
-
-        if (entries.length === 0) {
-            container.innerHTML = '<div class="empty-state"><div class="icon">📊</div>No call data yet</div>';
-            return;
-        }
-
-        let html = '<div style="display:grid;gap:8px">';
-        for (const [status, count] of entries) {
-            const pct = Math.round((count / Object.values(byStatus).reduce((a,b) => a+b, 0)) * 100);
-            const color = getStatusColor(status);
-            html += `
-                <div style="display:flex;align-items:center;gap:12px">
-                    <span class="badge badge-${getStatusBadge(status)}" style="min-width:120px;text-align:center">${status}</span>
-                    <div style="flex:1;background:var(--gray-100);border-radius:4px;height:24px;overflow:hidden">
-                        <div style="width:${pct}%;background:${color};height:100%;border-radius:4px;transition:width .3s"></div>
-                    </div>
-                    <span style="font-weight:700;min-width:40px;text-align:right">${count}</span>
-                </div>`;
-        }
-        html += '</div>';
-        container.innerHTML = html;
-    }
-
-    function getStatusColor(status) {
-        const map = {
-            PENDING: '#d97706', ACTIVE_LOOKING: '#2563eb', NOT_LOOKING: '#6b7280',
-            CALL_BACK: '#92400e', FAILED: '#dc2626', QUALIFIED: '#059669',
-            PARTIALLY_QUALIFIED: '#0891b2', NOT_QUALIFIED: '#6b7280',
-            NO_ANSWER: '#9ca3af', VOICEMAIL: '#8b5cf6', BUSY: '#ea580c',
-            WRONG_NUMBER: '#dc2626', DNC: '#991b1b',
-        };
-        return map[status] || '#6b7280';
-    }
-
-    function getStatusBadge(status) {
-        const map = {
-            PENDING: 'pending', ACTIVE_LOOKING: 'active', NOT_LOOKING: 'not-looking',
-            CALL_BACK: 'callback', FAILED: 'failed', QUALIFIED: 'qualified',
-            DNC: 'dnc', NO_ANSWER: 'pending', VOICEMAIL: 'pending',
-        };
-        return map[status] || 'pending';
-    }
-
-    // ── Fetch records for table ──────────────────────────
-    async function fetchRecords() {
-        try {
-            const resp = await fetch(`${API}/export`);
-            if (!resp.ok) return;
-
-            const text = await resp.text();
-            const lines = text.trim().split('\n');
-            if (lines.length <= 1) return;
-
-            const headers = lines[0].split(',');
-            const tbody = document.getElementById('recordsBody');
-            let html = '';
-
-            for (let i = 1; i < lines.length; i++) {
-                const cols = parseCSVLine(lines[i]);
-                if (cols.length < 7) continue;
-
-                const name = `${cols[1] || ''} ${cols[2] || ''}`.trim() || cols[0];
-                const phone = cols[3];
-                const jobRole = cols[4];
-                const status = cols[5];
-                const summary = cols[6] || '-';
-                const recording = cols[12] || '';
-
-                html += `<tr>
-                    <td><strong>${escapeHtml(name)}</strong></td>
-                    <td>${escapeHtml(phone)}</td>
-                    <td>${escapeHtml(jobRole)}</td>
-                    <td><span class="badge badge-${getStatusBadge(status)}">${escapeHtml(status)}</span></td>
-                    <td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(summary)}">${escapeHtml(summary)}</td>
-                    <td>${recording ? `<a href="${escapeHtml(recording)}" target="_blank" class="audio-link">🎧 Listen</a>` : '-'}</td>
-                </tr>`;
-            }
-
-            tbody.innerHTML = html || '<tr><td colspan="6" class="empty-state">No records</td></tr>';
-        } catch (e) {
-            // Silently fail — table just won't update
-        }
-    }
-
-    // ── Export Report ────────────────────────────────────
-    async function exportReport() {
-        addLog('Downloading report...');
-        try {
-            const resp = await fetch(`${API}/export?include_transcript=true`);
-            if (!resp.ok) throw new Error('Export failed');
-
-            const blob = await resp.blob();
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `recruitment_report_${new Date().toISOString().slice(0,10)}.csv`;
-            a.click();
-            URL.revokeObjectURL(url);
-
-            toast('📥 Report downloaded', 'success');
-            addLog('Report exported successfully', 'success');
-        } catch (e) {
-            toast('Export failed', 'error');
-            addLog(`Export error: ${e.message}`, 'error');
-        }
-    }
-
-    // ── Test Call ────────────────────────────────────────
-    async function testCall() {
-        const phone = document.getElementById('testPhone').value.trim();
-        const name = document.getElementById('testName').value.trim() || 'Test';
-
-        if (!phone) return toast('Enter a phone number', 'error');
-
-        addLog(`Placing test call to ${phone}...`);
-        toast('📞 Placing call...', 'info');
-
-        try {
-            const form = new FormData();
-            form.append('phone', phone);
-            form.append('name', name);
-
-            const resp = await fetch(`${API}/test-call`, { method: 'POST', body: form });
-            const data = await resp.json();
-
-            if (data.status === 'ok') {
-                toast('✅ Call placed! Phone should ring shortly.', 'success');
-                addLog(`Test call queued — VAPI call ID: ${data.vapi_response?.id}`, 'success');
-            } else {
-                toast(`❌ ${data.error || 'Call failed'}`, 'error');
-                addLog(`Test call error: ${data.error}`, 'error');
-                if (data.response_body) addLog(`VAPI: ${data.response_body}`, 'error');
-            }
-        } catch (e) {
-            toast('Call failed — server error', 'error');
-            addLog(`Error: ${e.message}`, 'error');
-        }
-    }
-
-    // ── Utility ──────────────────────────────────────────
-    function escapeHtml(str) {
-        const div = document.createElement('div');
-        div.textContent = str || '';
-        return div.innerHTML;
-    }
-
-    function parseCSVLine(line) {
-        const result = [];
-        let current = '';
-        let inQuotes = false;
-
-        for (let i = 0; i < line.length; i++) {
-            const ch = line[i];
-            if (ch === '"') {
-                if (inQuotes && line[i+1] === '"') {
-                    current += '"';
-                    i++;
-                } else {
-                    inQuotes = !inQuotes;
-                }
-            } else if (ch === ',' && !inQuotes) {
-                result.push(current);
-                current = '';
-            } else {
-                current += ch;
-            }
-        }
-        result.push(current);
-        return result;
-    }
-
-    // ── Init ─────────────────────────────────────────────
-    refreshStatus();
-    setInterval(() => {
-        fetch(`${API}/health`).then(r => {
-            if (r.ok) {
-                document.getElementById('serverStatus').textContent = 'Connected';
-                document.getElementById('statusDot').style.background = '#059669';
-            }
-        }).catch(() => {
-            document.getElementById('serverStatus').textContent = 'Disconnected';
-            document.getElementById('statusDot').style.background = '#dc2626';
-        });
-    }, 15000);
+document.getElementById('newCampaignModal').addEventListener('click', function(e) {
+  if (e.target === this) closeNewCampaignModal();
+});
 </script>
 
 </body>

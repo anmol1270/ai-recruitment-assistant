@@ -50,6 +50,19 @@ class Settings(BaseSettings):
     host: str = Field(default="0.0.0.0")
     port: int = Field(default=8000)
 
+    # ── PostgreSQL (SaaS) ───────────────────────────────────────
+    database_url: str = Field(default="", description="PostgreSQL connection string")
+
+    # ── Google OAuth ────────────────────────────────────────────
+    google_client_id: str = Field(default="")
+    google_client_secret: str = Field(default="")
+    jwt_secret: str = Field(default="change-me-to-a-random-string")
+
+    # ── Stripe ──────────────────────────────────────────────────
+    stripe_secret_key: str = Field(default="")
+    stripe_webhook_secret: str = Field(default="")
+    stripe_pro_price_id: str = Field(default="", description="Stripe Price ID for Pro plan")
+
     def ensure_dirs(self) -> None:
         """Create required directories if they don't exist."""
         for d in [
