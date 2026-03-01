@@ -38,14 +38,16 @@ RULES:
 """
 
 # Analysis prompt — VAPI will run this after the call to extract structured data
-ANALYSIS_PROMPT = """Analyze the call transcript and extract the following:
+ANALYSIS_PROMPT = """Analyze the call transcript carefully and extract the following:
 
-1. disposition: One of ACTIVE_LOOKING, NOT_LOOKING, CALL_BACK, WRONG_NUMBER, DNC
-   - ACTIVE_LOOKING: Candidate is actively looking or open to opportunities
-   - NOT_LOOKING: Candidate is not interested in new roles
-   - CALL_BACK: Candidate asked to be called back later
-   - WRONG_NUMBER: Wrong person or number
-   - DNC: Candidate asked to be removed from the list
+1. disposition: Choose EXACTLY ONE based on what the candidate ACTUALLY SAID:
+   - ACTIVE_LOOKING: Candidate explicitly said they ARE looking for a job, ARE open to opportunities, or ARE interested in new roles
+   - NOT_LOOKING: Candidate said they are NOT looking, NOT interested, NOT open to new roles, happy where they are, or declined the opportunity
+   - CALL_BACK: Candidate said it's a bad time, asked to be called back later, or said they're busy right now
+   - WRONG_NUMBER: Wrong person or wrong number
+   - DNC: Candidate explicitly asked to be removed from the call list or said do not call again
+
+IMPORTANT: Pay close attention to negation. If the candidate says "I am NOT looking" or "not interested" or "not open", the disposition MUST be NOT_LOOKING, not ACTIVE_LOOKING.
 
 2. summary: A 1-2 sentence summary of the call outcome.
 

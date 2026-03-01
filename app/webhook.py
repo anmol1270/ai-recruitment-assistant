@@ -81,6 +81,56 @@ def _infer_disposition_from_summary(summary: str) -> Disposition:
     return Disposition.NOT_QUALIFIED
 
 
+def _cross_check_disposition(disposition: Disposition, summary: str) -> Disposition:
+    """
+    Cross-check VAPI's structured disposition against the summary text.
+    Fixes cases where VAPI returns ACTIVE_LOOKING but summary says 'not looking'.
+    """
+    if not summary:
+        return disposition
+
+    s = summary.lower()
+
+    # If disposition is ACTIVE_LOOKING but summary indicates NOT looking
+    if disposition == Disposition.ACTIVE_LOOKING:
+        not_looking_signals = [
+            "not looking", "not interested", "not open",
+            "not currently looking", "not actively looking",
+            "declined", "not seeking", "happy where",
+            "were not looking", "was not looking",
+            "they were not", "not wanting",
+        ]
+        if any(kw in s for kw in not_looking_signals):
+            log.warning(
+                "disposition_cross_check_corrected",
+                original="ACTIVE_LOOKING",
+                corrected="NOT_LOOKING",
+                summary_snippet=s[:120],
+            )
+            return Disposition.NOT_LOOKING
+
+    # If disposition is NOT_LOOKING but summary clearly says actively looking
+    if disposition == Disposition.NOT_LOOKING:
+        active_signals = [
+            "actively looking for", "is looking for a new",
+            "interested in new opportunities",
+            "open to new roles", "seeking new",
+        ]
+        # Only override if NO negative keywords present
+        if any(kw in s for kw in active_signals) and not any(
+            neg in s for neg in ["not looking", "not interested", "not open", "declined"]
+        ):
+            log.warning(
+                "disposition_cross_check_corrected",
+                original="NOT_LOOKING",
+                corrected="ACTIVE_LOOKING",
+                summary_snippet=s[:120],
+            )
+            return Disposition.ACTIVE_LOOKING
+
+    return disposition
+
+
 def _extract_analysis_fields(analysis: Optional[dict]) -> dict:
     """Extract summary, location, availability from VAPI analysis."""
     if not analysis:
@@ -212,6 +262,9 @@ async def _handle_end_of_call(payload: dict, db: Database) -> None:
     short_summary = analysis_fields.get("summary", "")
     if not short_summary and ended_reason:
         short_summary = f"Call ended: {ended_reason}"
+
+    # ── Cross-check disposition against summary ─────────────────
+    disposition = _cross_check_disposition(disposition, short_summary)
 
     # ── Update database ─────────────────────────────────────────
     await db.update_call_result(
