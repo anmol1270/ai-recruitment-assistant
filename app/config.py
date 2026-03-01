@@ -28,8 +28,8 @@ class Settings(BaseSettings):
     webhook_secret: str = Field(default="change_me")
 
     # ── Calling rules ───────────────────────────────────────────
-    calling_window_start: str = Field(default="09:00")
-    calling_window_end: str = Field(default="20:00")
+    calling_window_start: str = Field(default="07:00")
+    calling_window_end: str = Field(default="22:00")
     calling_timezone: str = Field(default="Europe/London")
 
     max_concurrent_calls: int = Field(default=5, ge=1, le=50)
