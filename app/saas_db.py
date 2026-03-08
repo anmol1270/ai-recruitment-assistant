@@ -87,6 +87,28 @@ CREATE TABLE IF NOT EXISTS usage (
     UNIQUE(user_id, month)
 );
 
+CREATE TABLE IF NOT EXISTS resume_rankings (
+    id              SERIAL PRIMARY KEY,
+    campaign_id     INT REFERENCES campaigns(id) ON DELETE CASCADE,
+    user_id         INT REFERENCES users(id) ON DELETE CASCADE,
+    filename        VARCHAR(500) NOT NULL,
+    full_name       VARCHAR(255) DEFAULT '',
+    email           VARCHAR(255) DEFAULT '',
+    phone           VARCHAR(100) DEFAULT '',
+    current_title   VARCHAR(255) DEFAULT '',
+    years_experience INT DEFAULT 0,
+    resume_text     TEXT DEFAULT '',
+    skills_match        INT DEFAULT 0,
+    experience_relevance INT DEFAULT 0,
+    education_fit       INT DEFAULT 0,
+    overall_suitability INT DEFAULT 0,
+    total_score     INT DEFAULT 0,
+    reasoning       TEXT DEFAULT '',
+    selected        BOOLEAN DEFAULT FALSE,
+    promoted_to_candidate BOOLEAN DEFAULT FALSE,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
 CREATE INDEX IF NOT EXISTS idx_candidates_campaign ON candidates(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_candidates_user ON candidates(user_id);
 CREATE INDEX IF NOT EXISTS idx_candidates_status ON candidates(status);
@@ -94,6 +116,8 @@ CREATE INDEX IF NOT EXISTS idx_candidates_vapi_call ON candidates(vapi_call_id);
 CREATE INDEX IF NOT EXISTS idx_campaigns_user ON campaigns(user_id);
 CREATE INDEX IF NOT EXISTS idx_call_logs_campaign ON call_logs(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_usage_user_month ON usage(user_id, month);
+CREATE INDEX IF NOT EXISTS idx_resume_rankings_campaign ON resume_rankings(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_resume_rankings_selected ON resume_rankings(campaign_id, selected);
 """
 
 
@@ -503,4 +527,106 @@ class SaaSDatabase:
                    VALUES ($1, $2, $3, $4, $5, $6, $7)""",
                 user_id, campaign_id, candidate_id,
                 vapi_call_id, action, status, detail,
+            )
+
+    # ── Resume ranking operations ───────────────────────────────
+
+    async def add_resume_ranking(
+        self,
+        campaign_id: int,
+        user_id: int,
+        filename: str,
+        full_name: str,
+        email: str,
+        phone: str,
+        current_title: str,
+        years_experience: int,
+        resume_text: str,
+        skills_match: int,
+        experience_relevance: int,
+        education_fit: int,
+        overall_suitability: int,
+        total_score: int,
+        reasoning: str,
+        selected: bool,
+    ) -> dict:
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """INSERT INTO resume_rankings
+                   (campaign_id, user_id, filename, full_name, email, phone,
+                    current_title, years_experience, resume_text,
+                    skills_match, experience_relevance, education_fit,
+                    overall_suitability, total_score, reasoning, selected)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+                   RETURNING *""",
+                campaign_id, user_id, filename, full_name, email, phone,
+                current_title, years_experience, resume_text[:5000],
+                skills_match, experience_relevance, education_fit,
+                overall_suitability, total_score, reasoning, selected,
+            )
+            return dict(row)
+
+    async def get_resume_rankings(
+        self, campaign_id: int, user_id: int, selected_only: bool = False,
+    ) -> list[dict]:
+        async with self._pool.acquire() as conn:
+            if selected_only:
+                rows = await conn.fetch(
+                    """SELECT * FROM resume_rankings
+                       WHERE campaign_id = $1 AND user_id = $2 AND selected = TRUE
+                       ORDER BY total_score DESC""",
+                    campaign_id, user_id,
+                )
+            else:
+                rows = await conn.fetch(
+                    """SELECT * FROM resume_rankings
+                       WHERE campaign_id = $1 AND user_id = $2
+                       ORDER BY total_score DESC""",
+                    campaign_id, user_id,
+                )
+            return [dict(r) for r in rows]
+
+    async def get_ranking_stats(self, campaign_id: int, user_id: int) -> dict:
+        async with self._pool.acquire() as conn:
+            total = await conn.fetchval(
+                "SELECT COUNT(*) FROM resume_rankings WHERE campaign_id = $1 AND user_id = $2",
+                campaign_id, user_id,
+            )
+            selected = await conn.fetchval(
+                "SELECT COUNT(*) FROM resume_rankings WHERE campaign_id = $1 AND user_id = $2 AND selected = TRUE",
+                campaign_id, user_id,
+            )
+            avg_score = await conn.fetchval(
+                "SELECT COALESCE(AVG(total_score), 0) FROM resume_rankings WHERE campaign_id = $1 AND user_id = $2",
+                campaign_id, user_id,
+            )
+            promoted = await conn.fetchval(
+                "SELECT COUNT(*) FROM resume_rankings WHERE campaign_id = $1 AND user_id = $2 AND promoted_to_candidate = TRUE",
+                campaign_id, user_id,
+            )
+            return {
+                "total_resumes": total,
+                "selected": selected,
+                "rejected": total - selected,
+                "avg_score": round(float(avg_score), 1),
+                "promoted_to_calls": promoted,
+            }
+
+    async def mark_rankings_promoted(
+        self, campaign_id: int, user_id: int, ranking_ids: list[int],
+    ) -> int:
+        """Mark rankings as promoted to the calling pipeline."""
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(
+                """UPDATE resume_rankings SET promoted_to_candidate = TRUE
+                   WHERE id = ANY($1::int[]) AND campaign_id = $2 AND user_id = $3""",
+                ranking_ids, campaign_id, user_id,
+            )
+            return int(result.split()[-1]) if result else 0
+
+    async def clear_resume_rankings(self, campaign_id: int, user_id: int) -> None:
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM resume_rankings WHERE campaign_id = $1 AND user_id = $2",
+                campaign_id, user_id,
             )

@@ -36,6 +36,8 @@ from app.billing import BillingManager, PLANS
 from app.config import get_settings
 from app.csv_pipeline import ingest_csv
 from app.phone_utils import normalise_phone
+from app.resume_parser import parse_resumes_from_zip
+from app.ats_ranker import ATSRanker
 from app.saas_db import SaaSDatabase
 from app.vapi_client import VAPIClient
 from app.webhook import (
@@ -54,6 +56,7 @@ _settings = None
 _auth: Optional[AuthManager] = None
 _billing: Optional[BillingManager] = None
 _vapi: Optional[VAPIClient] = None
+_ranker: Optional[ATSRanker] = None
 _active_tasks: dict[int, asyncio.Task] = {}  # campaign_id -> task
 
 
@@ -90,8 +93,16 @@ async def lifespan(app: FastAPI):
     # VAPI
     _vapi = VAPIClient(_settings)
 
+    # ATS Ranker
+    if _settings.openai_api_key:
+        _ranker = ATSRanker(_settings.openai_api_key)
+    else:
+        log.warning("no_openai_api_key", msg="Set OPENAI_API_KEY for resume ranking")
+
     log.info("saas_server_started")
     yield
+    if _ranker:
+        await _ranker.close()
     if _vapi:
         await _vapi.close()
     if _db:
@@ -326,6 +337,217 @@ def create_saas_app() -> FastAPI:
             "valid_records": count,
             "rejected_records": len(rejected),
             "rejected_details": rejection_details,
+        }
+
+    # ── Upload resumes (ZIP) and AI-rank them ───────────────────
+    @app.post("/api/campaigns/{campaign_id}/upload-resumes")
+    async def upload_resumes(
+        campaign_id: int,
+        request: Request,
+        file: UploadFile = File(...),
+    ):
+        """Upload a ZIP of resumes → parse → AI rank → return results."""
+        user_id = _auth.require_auth(request)
+        campaign = await _db.get_campaign(campaign_id, user_id)
+        if not campaign:
+            raise HTTPException(404, "Campaign not found")
+
+        if not _ranker:
+            raise HTTPException(503, "Resume ranking not configured. Set OPENAI_API_KEY.")
+
+        if not file.filename or not file.filename.lower().endswith(".zip"):
+            raise HTTPException(400, "File must be a .zip archive containing resumes (PDF/DOCX)")
+
+        zip_data = await file.read()
+        if len(zip_data) > 50 * 1024 * 1024:  # 50 MB limit
+            raise HTTPException(400, "ZIP file too large (max 50 MB)")
+
+        # 1. Parse resumes from ZIP
+        try:
+            parsed = parse_resumes_from_zip(zip_data)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+        if not parsed:
+            raise HTTPException(400, "No valid resumes found in ZIP (supported: PDF, DOCX, TXT)")
+
+        valid_resumes = [r for r in parsed if r.get("text") and not r.get("error")]
+        if not valid_resumes:
+            raise HTTPException(400, f"Could not extract text from any of the {len(parsed)} files")
+
+        # 2. Build job description from campaign
+        job_desc = f"Job Role: {campaign['job_role']}\n"
+        if campaign.get("description"):
+            job_desc += f"\n{campaign['description']}"
+        if campaign.get("custom_prompt"):
+            job_desc += f"\n\nAdditional Requirements:\n{campaign['custom_prompt']}"
+
+        # 3. AI rank all resumes
+        top_percent = _settings.ats_top_percent
+        ranking_result = await _ranker.rank_resumes(
+            resumes=valid_resumes,
+            job_description=job_desc,
+            top_percent=top_percent,
+        )
+
+        # 4. Clear previous rankings for this campaign and store new ones
+        await _db.clear_resume_rankings(campaign_id, user_id)
+
+        selected_set = {r["filename"] for r in ranking_result["selected"]}
+
+        for r in ranking_result["all_ranked"]:
+            await _db.add_resume_ranking(
+                campaign_id=campaign_id,
+                user_id=user_id,
+                filename=r.get("filename", ""),
+                full_name=r.get("full_name", ""),
+                email=r.get("email", ""),
+                phone=r.get("phone", ""),
+                current_title=r.get("current_title", ""),
+                years_experience=int(r.get("years_experience", 0)),
+                resume_text=r.get("resume_text", ""),
+                skills_match=r.get("skills_match", 0),
+                experience_relevance=r.get("experience_relevance", 0),
+                education_fit=r.get("education_fit", 0),
+                overall_suitability=r.get("overall_suitability", 0),
+                total_score=r.get("total_score", 0),
+                reasoning=r.get("reasoning", ""),
+                selected=r["filename"] in selected_set,
+            )
+
+        parse_errors = [r for r in parsed if r.get("error")]
+
+        return {
+            "status": "ok",
+            "stats": ranking_result["stats"],
+            "rankings": [
+                {
+                    "filename": r.get("filename"),
+                    "full_name": r.get("full_name"),
+                    "email": r.get("email"),
+                    "phone": r.get("phone"),
+                    "current_title": r.get("current_title"),
+                    "total_score": r.get("total_score"),
+                    "skills_match": r.get("skills_match"),
+                    "experience_relevance": r.get("experience_relevance"),
+                    "education_fit": r.get("education_fit"),
+                    "overall_suitability": r.get("overall_suitability"),
+                    "reasoning": r.get("reasoning"),
+                    "selected": r["filename"] in selected_set,
+                }
+                for r in ranking_result["all_ranked"]
+            ],
+            "parse_errors": [
+                {"filename": e["filename"], "error": e["error"]}
+                for e in parse_errors[:10]
+            ],
+        }
+
+    @app.get("/api/campaigns/{campaign_id}/rankings")
+    async def get_rankings(campaign_id: int, request: Request):
+        """Get resume rankings for a campaign."""
+        user_id = _auth.require_auth(request)
+        campaign = await _db.get_campaign(campaign_id, user_id)
+        if not campaign:
+            raise HTTPException(404, "Campaign not found")
+
+        rankings = await _db.get_resume_rankings(campaign_id, user_id)
+        stats = await _db.get_ranking_stats(campaign_id, user_id)
+
+        return {
+            "rankings": [
+                {
+                    "id": r["id"],
+                    "filename": r["filename"],
+                    "full_name": r["full_name"],
+                    "email": r["email"],
+                    "phone": r["phone"],
+                    "current_title": r["current_title"],
+                    "years_experience": r["years_experience"],
+                    "total_score": r["total_score"],
+                    "skills_match": r["skills_match"],
+                    "experience_relevance": r["experience_relevance"],
+                    "education_fit": r["education_fit"],
+                    "overall_suitability": r["overall_suitability"],
+                    "reasoning": r["reasoning"],
+                    "selected": r["selected"],
+                    "promoted_to_candidate": r["promoted_to_candidate"],
+                }
+                for r in rankings
+            ],
+            "stats": stats,
+        }
+
+    @app.post("/api/campaigns/{campaign_id}/promote-rankings")
+    async def promote_rankings(campaign_id: int, request: Request):
+        """
+        Promote selected ranked resumes to the calling pipeline.
+        Creates candidates from the top-ranked resumes that have phone numbers.
+        Optionally pass {"ranking_ids": [1,2,3]} to promote specific ones,
+        or omit to promote all selected.
+        """
+        user_id = _auth.require_auth(request)
+        campaign = await _db.get_campaign(campaign_id, user_id)
+        if not campaign:
+            raise HTTPException(404, "Campaign not found")
+
+        body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+        ranking_ids = body.get("ranking_ids", None)
+
+        # Get rankings to promote
+        if ranking_ids:
+            rankings = await _db.get_resume_rankings(campaign_id, user_id)
+            to_promote = [r for r in rankings if r["id"] in ranking_ids]
+        else:
+            to_promote = await _db.get_resume_rankings(campaign_id, user_id, selected_only=True)
+
+        # Filter: must have a phone number
+        promoted = []
+        skipped_no_phone = 0
+        for r in to_promote:
+            phone_raw = r.get("phone", "").strip()
+            if not phone_raw:
+                skipped_no_phone += 1
+                continue
+
+            # Try to normalise the phone
+            e164, valid = normalise_phone(phone_raw)
+            if not valid:
+                skipped_no_phone += 1
+                continue
+
+            # Split full_name into first/last
+            name_parts = (r.get("full_name", "") or "").strip().split(maxsplit=1)
+            first_name = name_parts[0] if name_parts else ""
+            last_name = name_parts[1] if len(name_parts) > 1 else ""
+
+            promoted.append({
+                "unique_record_id": f"resume_{r['id']}_{uuid.uuid4().hex[:6]}",
+                "first_name": first_name,
+                "last_name": last_name,
+                "phone_e164": e164,
+                "email": r.get("email", ""),
+            })
+
+        if not promoted:
+            raise HTTPException(
+                400,
+                f"No candidates could be promoted. {skipped_no_phone} resumes had no valid phone number."
+            )
+
+        # Insert as candidates
+        count = await _db.add_candidates(campaign_id, user_id, promoted)
+
+        # Mark as promoted in rankings table
+        promoted_ids = [r["id"] for r in to_promote if r.get("phone")]
+        if promoted_ids:
+            await _db.mark_rankings_promoted(campaign_id, user_id, promoted_ids)
+
+        return {
+            "status": "ok",
+            "promoted": count,
+            "skipped_no_phone": skipped_no_phone,
+            "message": f"{count} candidates added to calling pipeline from resume rankings.",
         }
 
     # ── Start calls for campaign ────────────────────────────────

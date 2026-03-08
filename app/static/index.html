@@ -268,6 +268,68 @@ tr:hover { background: var(--surface2); }
 .upload-zone.dragover { border-color: var(--primary); background: rgba(108,92,231,.05); }
 .upload-zone p { color: var(--text-dim); margin-top: 8px; font-size: 14px; }
 
+/* Resume ranking */
+.ranking-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 8px;
+  background: var(--surface);
+  transition: border-color .2s;
+}
+.ranking-card.selected { border-left: 4px solid var(--success); }
+.ranking-card.rejected { border-left: 4px solid var(--text-dim); opacity: 0.7; }
+.ranking-rank {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--primary);
+  min-width: 36px;
+  text-align: center;
+}
+.ranking-info { flex: 1; min-width: 0; }
+.ranking-name { font-weight: 700; font-size: 15px; }
+.ranking-meta { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+.ranking-scores {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.score-pill {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: var(--surface2);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.score-pill.high { background: rgba(0,184,148,.15); color: #00b894; }
+.score-pill.mid  { background: rgba(253,203,110,.15); color: #cc8e35; }
+.score-pill.low  { background: rgba(214,48,49,.1); color: #d63031; }
+.ranking-total {
+  font-size: 28px;
+  font-weight: 800;
+  min-width: 60px;
+  text-align: center;
+}
+.ranking-total.high { color: #00b894; }
+.ranking-total.mid  { color: #cc8e35; }
+.ranking-total.low  { color: #d63031; }
+.ranking-reasoning {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: 4px;
+  font-style: italic;
+}
+.ranking-stats-bar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+
 /* Progress bar */
 .progress-bar {
   height: 8px;
@@ -536,10 +598,25 @@ tr:hover { background: var(--surface2); }
       <div class="card" style="display:flex;flex-wrap:wrap;gap:12px;align-items:center">
         <button class="btn btn-primary" id="btnUploadCSV" onclick="document.getElementById('csvFileInput').click()">📁 Upload CSV</button>
         <input type="file" id="csvFileInput" accept=".csv" style="display:none" onchange="uploadCSV(this)">
+        <button class="btn btn-primary" onclick="document.getElementById('resumeZipInput').click()">📄 Upload Resumes (ZIP)</button>
+        <input type="file" id="resumeZipInput" accept=".zip" style="display:none" onchange="uploadResumes(this)">
         <button class="btn btn-success" id="btnStartCalls" onclick="startCampaignCalls()">📞 Start Calls</button>
         <button class="btn btn-outline" onclick="refreshCampaignDetail()">🔄 Refresh</button>
         <button class="btn btn-outline" onclick="exportCampaign()">📥 Export CSV</button>
         <button class="btn btn-danger btn-sm" onclick="deleteCampaign()" style="margin-left:auto">🗑 Delete</button>
+      </div>
+
+      <!-- Resume Rankings Section -->
+      <div class="card" id="rankingsSection" style="display:none">
+        <div class="card-title" style="display:flex;justify-content:space-between;align-items:center">
+          <span>📊 AI Resume Rankings</span>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-success btn-sm" id="btnPromoteRankings" onclick="promoteRankings()">✅ Promote Top Candidates to Calls</button>
+            <button class="btn btn-outline btn-sm" onclick="loadRankings()">🔄 Refresh</button>
+          </div>
+        </div>
+        <div class="ranking-stats-bar" id="rankingStatsBar"></div>
+        <div id="rankingsList"></div>
       </div>
 
       <div class="card" id="uploadZoneCard">
@@ -549,7 +626,8 @@ tr:hover { background: var(--surface2); }
              ondrop="handleDrop(event)">
           <div style="font-size:32px">📂</div>
           <p>Drag & drop a CSV file here, or click "Upload CSV" above</p>
-          <p style="font-size:12px;margin-top:8px">Required column: phone. Optional: first_name, last_name, email</p>
+          <p style="font-size:12px;margin-top:8px">CSV: phone (required), first_name, last_name, email</p>
+          <p style="font-size:12px;margin-top:4px">ZIP: Upload resumes (PDF/DOCX) — AI will rank them and select top 30%</p>
         </div>
       </div>
 
@@ -927,6 +1005,9 @@ async function refreshCampaignDetail() {
           '<td>' + (c.attempt_count||0) + '</td></tr>';
       }).join('');
     }
+
+    // Load resume rankings if any
+    await loadRankings();
   } catch (err) { toast('Failed to load campaign: ' + err.message, 'error'); }
 }
 
@@ -954,6 +1035,110 @@ async function uploadCSVFile(file) {
     if (!resp.ok) throw new Error(data.detail || 'Upload failed');
     toast('Uploaded ' + data.valid_records + ' candidates (' + data.rejected_records + ' rejected)', 'success');
     refreshCampaignDetail();
+  } catch (err) { toast(err.message, 'error'); }
+}
+
+/* Upload Resumes (ZIP) */
+async function uploadResumes(input) {
+  var file = input.files[0];
+  input.value = '';
+  if (!file || !currentCampaignId) return;
+  if (!file.name.toLowerCase().endsWith('.zip')) { toast('Please upload a .zip file', 'error'); return; }
+
+  var formData = new FormData();
+  formData.append('file', file);
+
+  try {
+    toast('Uploading & ranking resumes... This may take a minute.', 'info');
+    document.getElementById('rankingsSection').style.display = 'block';
+    document.getElementById('rankingsList').innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-dim)"><div style="font-size:32px;margin-bottom:12px">🧠</div>AI is analyzing resumes against the job description...<br><small>This usually takes 5-30 seconds per resume</small></div>';
+
+    var resp = await fetch('/api/campaigns/' + currentCampaignId + '/upload-resumes', { method: 'POST', body: formData });
+    var data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || 'Upload failed');
+
+    toast('Ranked ' + data.stats.total_resumes + ' resumes — ' + data.stats.selected_count + ' selected (top ' + data.stats.top_percent + '%)', 'success');
+    renderRankings(data.rankings, data.stats);
+  } catch (err) {
+    toast(err.message, 'error');
+    document.getElementById('rankingsList').innerHTML = '<div style="text-align:center;padding:20px;color:#d63031">Error: ' + esc(err.message) + '</div>';
+  }
+}
+
+/* Load Rankings from DB */
+async function loadRankings() {
+  if (!currentCampaignId) return;
+  try {
+    var resp = await fetch('/api/campaigns/' + currentCampaignId + '/rankings');
+    var data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || 'Failed');
+    if (data.rankings && data.rankings.length > 0) {
+      document.getElementById('rankingsSection').style.display = 'block';
+      renderRankings(data.rankings, data.stats);
+    } else {
+      document.getElementById('rankingsSection').style.display = 'none';
+    }
+  } catch (err) { /* silently skip if no rankings */ }
+}
+
+/* Render Rankings */
+function renderRankings(rankings, stats) {
+  // Stats bar
+  var statsHtml = '<div class="stat-card" style="padding:12px 16px"><div class="stat-label">Total Resumes</div><div class="stat-value">' + (stats.total_resumes||0) + '</div></div>' +
+    '<div class="stat-card" style="padding:12px 16px"><div class="stat-label">Selected</div><div class="stat-value" style="color:#00b894">' + (stats.selected||stats.selected_count||0) + '</div></div>' +
+    '<div class="stat-card" style="padding:12px 16px"><div class="stat-label">Rejected</div><div class="stat-value" style="color:var(--text-dim)">' + (stats.rejected||stats.rejected_count||0) + '</div></div>' +
+    '<div class="stat-card" style="padding:12px 16px"><div class="stat-label">Avg Score</div><div class="stat-value">' + (stats.avg_score||0) + '</div></div>';
+  if (stats.promoted_to_calls > 0) {
+    statsHtml += '<div class="stat-card" style="padding:12px 16px"><div class="stat-label">In Call Pipeline</div><div class="stat-value" style="color:var(--primary)">' + stats.promoted_to_calls + '</div></div>';
+  }
+  document.getElementById('rankingStatsBar').innerHTML = statsHtml;
+
+  // Ranking cards
+  var html = '';
+  rankings.forEach(function(r, i) {
+    var scoreClass = r.total_score >= 70 ? 'high' : r.total_score >= 45 ? 'mid' : 'low';
+    var cardClass = r.selected ? 'selected' : 'rejected';
+    var pillClass = function(v) { return v >= 18 ? 'high' : v >= 12 ? 'mid' : 'low'; };
+    var promoted = r.promoted_to_candidate ? ' <span class="badge badge-active" style="font-size:10px">In Call Pipeline</span>' : '';
+
+    html += '<div class="ranking-card ' + cardClass + '">' +
+      '<div class="ranking-rank">#' + (i+1) + '</div>' +
+      '<div class="ranking-info">' +
+        '<div class="ranking-name">' + esc(r.full_name || r.filename) + promoted + '</div>' +
+        '<div class="ranking-meta">' +
+          (r.current_title ? esc(r.current_title) + ' · ' : '') +
+          (r.email ? esc(r.email) + ' · ' : '') +
+          (r.phone ? '📞 ' + esc(r.phone) : '<span style="color:#d63031">No phone</span>') +
+        '</div>' +
+        '<div class="ranking-scores">' +
+          '<span class="score-pill ' + pillClass(r.skills_match) + '">Skills ' + r.skills_match + '/25</span>' +
+          '<span class="score-pill ' + pillClass(r.experience_relevance) + '">Exp ' + r.experience_relevance + '/25</span>' +
+          '<span class="score-pill ' + pillClass(r.education_fit) + '">Edu ' + r.education_fit + '/25</span>' +
+          '<span class="score-pill ' + pillClass(r.overall_suitability) + '">Fit ' + r.overall_suitability + '/25</span>' +
+        '</div>' +
+        '<div class="ranking-reasoning">' + esc(r.reasoning || '') + '</div>' +
+      '</div>' +
+      '<div class="ranking-total ' + scoreClass + '">' + r.total_score + '</div>' +
+    '</div>';
+  });
+  document.getElementById('rankingsList').innerHTML = html;
+}
+
+/* Promote Rankings to Calling Pipeline */
+async function promoteRankings() {
+  if (!currentCampaignId) return;
+  if (!confirm('This will add the top-ranked candidates (with phone numbers) to the calling pipeline. Continue?')) return;
+  try {
+    var resp = await fetch('/api/campaigns/' + currentCampaignId + '/promote-rankings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({})
+    });
+    var data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || 'Failed');
+    toast(data.message || 'Candidates promoted!', 'success');
+    await refreshCampaignDetail();
+    await loadRankings();
   } catch (err) { toast(err.message, 'error'); }
 }
 

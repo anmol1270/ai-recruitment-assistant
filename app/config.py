@@ -63,6 +63,10 @@ class Settings(BaseSettings):
     stripe_webhook_secret: str = Field(default="")
     stripe_pro_price_id: str = Field(default="", description="Stripe Price ID for Pro plan")
 
+    # ── OpenAI (ATS Ranking) ────────────────────────────────────
+    openai_api_key: str = Field(default="", description="OpenAI API key for resume ranking")
+    ats_top_percent: float = Field(default=0.30, description="Top % of resumes to select (0.30 = 30%)")
+
     def ensure_dirs(self) -> None:
         """Create required directories if they don't exist."""
         for d in [
