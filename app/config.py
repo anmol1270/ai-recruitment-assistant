@@ -63,6 +63,11 @@ class Settings(BaseSettings):
     stripe_webhook_secret: str = Field(default="")
     stripe_pro_price_id: str = Field(default="", description="Stripe Price ID for Pro plan")
 
+    # ── Twilio ──────────────────────────────────────────────────
+    twilio_account_sid: str = Field(default="", description="Twilio Account SID")
+    twilio_auth_token: str = Field(default="", description="Twilio Auth Token")
+    phone_number_markup: float = Field(default=0.50, description="Markup over Twilio price per phone number")
+
     # ── OpenAI (ATS Ranking) ────────────────────────────────────
     openai_api_key: str = Field(default="", description="OpenAI API key for resume ranking")
     ats_top_percent: float = Field(default=0.30, description="Top % of resumes to select (0.30 = 30%)")

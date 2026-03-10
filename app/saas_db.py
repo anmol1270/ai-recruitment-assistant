@@ -116,8 +116,25 @@ CREATE INDEX IF NOT EXISTS idx_candidates_vapi_call ON candidates(vapi_call_id);
 CREATE INDEX IF NOT EXISTS idx_campaigns_user ON campaigns(user_id);
 CREATE INDEX IF NOT EXISTS idx_call_logs_campaign ON call_logs(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_usage_user_month ON usage(user_id, month);
+CREATE TABLE IF NOT EXISTS phone_numbers (
+    id              SERIAL PRIMARY KEY,
+    user_id         INT REFERENCES users(id) ON DELETE CASCADE,
+    phone_e164      VARCHAR(50) NOT NULL,
+    friendly_name   VARCHAR(255) DEFAULT '',
+    country_code    VARCHAR(5) DEFAULT '',
+    twilio_sid      VARCHAR(255) UNIQUE NOT NULL,
+    vapi_phone_id   VARCHAR(255) DEFAULT '',
+    monthly_cost    NUMERIC(10,2) DEFAULT 0,
+    our_price       NUMERIC(10,2) DEFAULT 0,
+    status          VARCHAR(20) DEFAULT 'active',
+    capabilities    JSONB DEFAULT '{}'::jsonb,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
 CREATE INDEX IF NOT EXISTS idx_resume_rankings_campaign ON resume_rankings(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_resume_rankings_selected ON resume_rankings(campaign_id, selected);
+CREATE INDEX IF NOT EXISTS idx_phone_numbers_user ON phone_numbers(user_id);
+CREATE INDEX IF NOT EXISTS idx_phone_numbers_twilio_sid ON phone_numbers(twilio_sid);
 """
 
 
@@ -630,3 +647,65 @@ class SaaSDatabase:
                 "DELETE FROM resume_rankings WHERE campaign_id = $1 AND user_id = $2",
                 campaign_id, user_id,
             )
+
+    # ── Phone number operations ─────────────────────────────────
+
+    async def add_phone_number(
+        self,
+        user_id: int,
+        phone_e164: str,
+        friendly_name: str,
+        country_code: str,
+        twilio_sid: str,
+        vapi_phone_id: str,
+        monthly_cost: float,
+        our_price: float,
+        capabilities: dict | None = None,
+    ) -> dict:
+        import json as _json
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """INSERT INTO phone_numbers
+                   (user_id, phone_e164, friendly_name, country_code,
+                    twilio_sid, vapi_phone_id, monthly_cost, our_price, capabilities)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)
+                   RETURNING *""",
+                user_id, phone_e164, friendly_name, country_code,
+                twilio_sid, vapi_phone_id, monthly_cost, our_price,
+                _json.dumps(capabilities or {}),
+            )
+            return dict(row)
+
+    async def get_phone_numbers(self, user_id: int) -> list[dict]:
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT * FROM phone_numbers
+                   WHERE user_id = $1 AND status = 'active'
+                   ORDER BY created_at DESC""",
+                user_id,
+            )
+            return [dict(r) for r in rows]
+
+    async def get_phone_number(self, phone_id: int, user_id: int) -> dict | None:
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM phone_numbers WHERE id = $1 AND user_id = $2",
+                phone_id, user_id,
+            )
+            return dict(row) if row else None
+
+    async def get_phone_number_by_vapi_id(self, vapi_phone_id: str) -> dict | None:
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM phone_numbers WHERE vapi_phone_id = $1",
+                vapi_phone_id,
+            )
+            return dict(row) if row else None
+
+    async def release_phone_number(self, phone_id: int, user_id: int) -> bool:
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(
+                "UPDATE phone_numbers SET status = 'released' WHERE id = $1 AND user_id = $2",
+                phone_id, user_id,
+            )
+            return "UPDATE 1" in result

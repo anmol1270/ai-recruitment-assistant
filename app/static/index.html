@@ -430,6 +430,43 @@ tr:hover { background: var(--surface2); }
 .toast.info { border-left: 3px solid var(--info); }
 @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 
+/* Phone Number Cards */
+.phone-card {
+  display: flex; align-items: center; gap: 16px;
+  padding: 16px; border-radius: var(--radius-sm);
+  background: var(--surface); border: 1px solid var(--border);
+  margin-bottom: 10px; transition: border-color .2s;
+}
+.phone-card:hover { border-color: var(--primary); }
+.phone-card .phone-icon { font-size: 28px; }
+.phone-card .phone-info { flex: 1; }
+.phone-card .phone-number { font-size: 16px; font-weight: 600; font-family: monospace; }
+.phone-card .phone-meta { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+.phone-card .phone-badges { display: flex; gap: 6px; margin-top: 6px; }
+.phone-card .phone-badge {
+  display: inline-block; padding: 2px 8px; border-radius: 12px;
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+}
+.phone-badge.voice { background: rgba(0,184,148,.15); color: #00b894; }
+.phone-badge.sms { background: rgba(108,92,231,.15); color: #6c5ce7; }
+.phone-badge.vapi { background: rgba(9,132,227,.15); color: #0984e3; }
+.phone-badge.no-vapi { background: rgba(214,48,49,.15); color: #d63031; }
+.phone-card .phone-price {
+  text-align: right; padding-left: 16px;
+}
+.phone-card .phone-price .amount { font-size: 18px; font-weight: 700; color: var(--primary); }
+.phone-card .phone-price .period { font-size: 11px; color: var(--text-dim); }
+.phone-search-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px; border-radius: var(--radius-sm);
+  background: var(--surface); border: 1px solid var(--border);
+  margin-bottom: 8px; transition: border-color .2s;
+}
+.phone-search-item:hover { border-color: var(--primary); }
+.phone-search-item .ps-number { font-family: monospace; font-weight: 600; font-size: 14px; }
+.phone-search-item .ps-meta { font-size: 12px; color: var(--text-dim); }
+.phone-search-item .ps-price { font-weight: 700; color: var(--primary); margin-right: 12px; }
+
 @media (max-width: 768px) {
   .sidebar { display: none; }
   .main-content { margin-left: 0; padding: 16px; }
@@ -486,6 +523,9 @@ tr:hover { background: var(--surface2); }
       </div>
       <div class="nav-item" data-page="campaigns" onclick="showPage('campaigns')">
         <span>📋</span> Campaigns
+      </div>
+      <div class="nav-item" data-page="phones" onclick="showPage('phones')">
+        <span>📞</span> Phone Numbers
       </div>
       <div class="nav-item" data-page="billing" onclick="showPage('billing')">
         <span>💳</span> Billing
@@ -709,6 +749,24 @@ tr:hover { background: var(--surface2); }
       </div>
     </div>
 
+    <!-- Phone Numbers Page -->
+    <div class="page" id="page-phones">
+      <h2 style="margin-bottom:20px">Phone Numbers</h2>
+
+      <div class="card">
+        <div class="card-title" style="display:flex;justify-content:space-between;align-items:center">
+          <span>📞 Your Phone Numbers</span>
+          <button class="btn btn-primary btn-sm" onclick="openBuyPhoneModal()">+ Buy New Number</button>
+        </div>
+        <p style="color:var(--text-dim);font-size:13px;margin-bottom:16px">
+          You need at least one phone number to start making calls. Numbers are purchased via Twilio with a $0.50/mo platform fee.
+        </p>
+        <div id="myPhoneNumbers">
+          <div style="text-align:center;padding:40px;color:var(--text-dim)">Loading...</div>
+        </div>
+      </div>
+    </div>
+
     <!-- Settings Page -->
     <div class="page" id="page-settings">
       <h2 style="margin-bottom:20px">Settings</h2>
@@ -772,6 +830,49 @@ tr:hover { background: var(--surface2); }
 
 <!-- Toast -->
 <div class="toast-container" id="toastContainer"></div>
+
+<!-- Buy Phone Number Modal -->
+<div class="modal-overlay" id="buyPhoneModal">
+  <div class="modal" style="max-width:700px">
+    <h2>Buy a Phone Number</h2>
+    <p style="color:var(--text-dim);font-size:13px;margin-bottom:16px">
+      Search for available numbers by country. Prices include a $0.50/mo platform fee.
+    </p>
+    <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+      <div class="form-group" style="flex:1;min-width:120px;margin-bottom:0">
+        <label>Country</label>
+        <select id="phoneCountry" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text)">
+          <option value="US">🇺🇸 United States</option>
+          <option value="GB">🇬🇧 United Kingdom</option>
+          <option value="CA">🇨🇦 Canada</option>
+          <option value="AU">🇦🇺 Australia</option>
+          <option value="FR">🇫🇷 France</option>
+          <option value="DE">🇩🇪 Germany</option>
+          <option value="AE">🇦🇪 UAE</option>
+          <option value="IN">🇮🇳 India</option>
+          <option value="IE">🇮🇪 Ireland</option>
+        </select>
+      </div>
+      <div class="form-group" style="flex:1;min-width:100px;margin-bottom:0">
+        <label>Area Code (opt.)</label>
+        <input type="text" id="phoneAreaCode" placeholder="e.g. 212">
+      </div>
+      <div class="form-group" style="flex:1;min-width:100px;margin-bottom:0">
+        <label>Type</label>
+        <select id="phoneType" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text)">
+          <option value="Local">Local</option>
+          <option value="TollFree">Toll-Free</option>
+          <option value="Mobile">Mobile</option>
+        </select>
+      </div>
+      <button class="btn btn-primary" onclick="searchPhoneNumbers()" id="btnSearchPhones">🔍 Search</button>
+    </div>
+    <div id="phoneSearchResults" style="margin-top:20px;max-height:350px;overflow-y:auto"></div>
+    <div class="modal-actions" style="margin-top:12px">
+      <button class="btn btn-outline" onclick="closeBuyPhoneModal()">Close</button>
+    </div>
+  </div>
+</div>
 
 <script>
 /* STATE */
@@ -855,6 +956,7 @@ function showPage(page) {
   if (page === 'dashboard') loadDashboard();
   if (page === 'campaigns') loadCampaigns();
   if (page === 'billing') loadBilling();
+  if (page === 'phones') loadPhoneNumbers();
 }
 
 /* DASHBOARD */
@@ -1290,6 +1392,189 @@ function toast(msg, type) {
 document.getElementById('newCampaignModal').addEventListener('click', function(e) {
   if (e.target === this) closeNewCampaignModal();
 });
+
+document.getElementById('buyPhoneModal').addEventListener('click', function(e) {
+  if (e.target === this) closeBuyPhoneModal();
+});
+
+/* ═══════════════════════════════════════════
+   PHONE NUMBERS
+   ═══════════════════════════════════════════ */
+
+function openBuyPhoneModal() {
+  document.getElementById('buyPhoneModal').classList.add('active');
+  document.getElementById('phoneSearchResults').innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-dim)">Search for available numbers above</div>';
+}
+
+function closeBuyPhoneModal() {
+  document.getElementById('buyPhoneModal').classList.remove('active');
+}
+
+async function loadPhoneNumbers() {
+  try {
+    var resp = await fetch('/api/phone-numbers');
+    var data = await resp.json();
+    var numbers = data.phone_numbers || [];
+    var container = document.getElementById('myPhoneNumbers');
+
+    if (numbers.length === 0) {
+      container.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-dim)">' +
+        '<div style="font-size:48px;margin-bottom:12px">📞</div>' +
+        '<div style="font-size:16px;font-weight:600;margin-bottom:8px">No Phone Numbers Yet</div>' +
+        '<div style="font-size:13px;margin-bottom:16px">Buy a number to start making recruitment calls.</div>' +
+        '<button class="btn btn-primary" onclick="openBuyPhoneModal()">+ Buy Your First Number</button></div>';
+      return;
+    }
+
+    container.innerHTML = numbers.map(function(n) {
+      var caps = n.capabilities || {};
+      var badges = '';
+      if (caps.voice) badges += '<span class="phone-badge voice">Voice</span>';
+      if (caps.sms) badges += '<span class="phone-badge sms">SMS</span>';
+      if (n.vapi_phone_id) {
+        badges += '<span class="phone-badge vapi">VAPI Ready</span>';
+      } else {
+        badges += '<span class="phone-badge no-vapi">VAPI Not Linked</span>';
+      }
+
+      var actions = '';
+      if (!n.vapi_phone_id) {
+        actions += '<button class="btn btn-primary btn-sm" onclick="retryVapi(' + n.id + ')" style="margin-right:8px">🔗 Connect VAPI</button>';
+      }
+      actions += '<button class="btn btn-danger btn-sm" onclick="releasePhoneNumber(' + n.id + ', \'' + esc(n.phone_e164) + '\')">Release</button>';
+
+      return '<div class="phone-card">' +
+        '<div class="phone-icon">📱</div>' +
+        '<div class="phone-info">' +
+          '<div class="phone-number">' + esc(n.phone_e164) + '</div>' +
+          '<div class="phone-meta">' + esc(n.friendly_name) + ' · ' + esc(n.country_code) + '</div>' +
+          '<div class="phone-badges">' + badges + '</div>' +
+        '</div>' +
+        '<div class="phone-price">' +
+          '<div class="amount">$' + Number(n.our_price).toFixed(2) + '</div>' +
+          '<div class="period">/month</div>' +
+        '</div>' +
+        '<div style="padding-left:12px">' + actions + '</div>' +
+      '</div>';
+    }).join('');
+  } catch (err) {
+    document.getElementById('myPhoneNumbers').innerHTML = '<div style="color:var(--danger);text-align:center;padding:20px">' + esc(err.message) + '</div>';
+  }
+}
+
+async function searchPhoneNumbers() {
+  var country = document.getElementById('phoneCountry').value;
+  var areaCode = document.getElementById('phoneAreaCode').value.trim();
+  var numType = document.getElementById('phoneType').value;
+  var results = document.getElementById('phoneSearchResults');
+  var btn = document.getElementById('btnSearchPhones');
+
+  btn.disabled = true;
+  btn.textContent = '⏳ Searching...';
+  results.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-dim)">Searching Twilio for available numbers...</div>';
+
+  try {
+    var resp = await fetch('/api/phone-numbers/search', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        country_code: country,
+        area_code: areaCode,
+        number_type: numType,
+        limit: 20
+      })
+    });
+    var data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || 'Search failed');
+
+    var numbers = data.numbers || [];
+    if (numbers.length === 0) {
+      results.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-dim)">No numbers found. Try a different country or area code.</div>';
+      return;
+    }
+
+    results.innerHTML = numbers.map(function(n) {
+      var capIcons = '';
+      if (n.capabilities && n.capabilities.voice) capIcons += '🔊';
+      if (n.capabilities && n.capabilities.sms) capIcons += '💬';
+
+      return '<div class="phone-search-item">' +
+        '<div>' +
+          '<div class="ps-number">' + esc(n.phone_number) + '</div>' +
+          '<div class="ps-meta">' + esc(n.locality || n.region || '') + ' · ' + esc(n.number_type) + ' ' + capIcons + '</div>' +
+        '</div>' +
+        '<div style="display:flex;align-items:center;gap:8px">' +
+          '<div style="text-align:right">' +
+            '<span class="ps-price">$' + n.our_price.toFixed(2) + '/mo</span>' +
+            '<div style="font-size:10px;color:var(--text-dim)">Twilio: $' + n.twilio_price.toFixed(2) + ' + $' + n.markup.toFixed(2) + ' fee</div>' +
+          '</div>' +
+          '<button class="btn btn-success btn-sm" onclick="buyPhoneNumber(\'' + esc(n.phone_number) + '\', \'' + country + '\', ' + n.twilio_price + ', ' + n.our_price + ')">Buy</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+  } catch (err) {
+    results.innerHTML = '<div style="text-align:center;padding:20px;color:var(--danger)">' + esc(err.message) + '</div>';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🔍 Search';
+  }
+}
+
+async function buyPhoneNumber(phoneNumber, countryCode, twilioPrice, ourPrice) {
+  if (!confirm('Purchase ' + phoneNumber + ' for $' + ourPrice.toFixed(2) + '/month?')) return;
+
+  try {
+    toast('Purchasing ' + phoneNumber + '...', 'info');
+    var resp = await fetch('/api/phone-numbers/purchase', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        phone_number: phoneNumber,
+        country_code: countryCode,
+        twilio_price: twilioPrice,
+        our_price: ourPrice
+      })
+    });
+    var data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || 'Purchase failed');
+
+    toast(data.message || 'Number purchased!', 'success');
+    if (!data.vapi_registered) {
+      toast('Note: VAPI registration pending — you can retry from the Phone Numbers page.', 'info');
+    }
+    closeBuyPhoneModal();
+    loadPhoneNumbers();
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+async function releasePhoneNumber(phoneId, phoneE164) {
+  if (!confirm('Release ' + phoneE164 + '? This will remove the number from Twilio and you will lose it.')) return;
+
+  try {
+    var resp = await fetch('/api/phone-numbers/' + phoneId, { method: 'DELETE' });
+    var data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || 'Release failed');
+    toast(data.message || 'Number released.', 'success');
+    loadPhoneNumbers();
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+async function retryVapi(phoneId) {
+  try {
+    toast('Registering with VAPI...', 'info');
+    var resp = await fetch('/api/phone-numbers/' + phoneId + '/retry-vapi', { method: 'POST' });
+    var data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || 'Registration failed');
+    toast('VAPI registration successful!', 'success');
+    loadPhoneNumbers();
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
 </script>
 
 </body>

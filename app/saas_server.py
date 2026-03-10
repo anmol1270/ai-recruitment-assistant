@@ -39,6 +39,7 @@ from app.phone_utils import normalise_phone
 from app.resume_parser import parse_resumes_from_zip
 from app.ats_ranker import ATSRanker
 from app.saas_db import SaaSDatabase
+from app.twilio_service import TwilioService
 from app.vapi_client import VAPIClient
 from app.webhook import (
     _parse_disposition_from_analysis,
@@ -57,6 +58,7 @@ _auth: Optional[AuthManager] = None
 _billing: Optional[BillingManager] = None
 _vapi: Optional[VAPIClient] = None
 _ranker: Optional[ATSRanker] = None
+_twilio: Optional[TwilioService] = None
 _active_tasks: dict[int, asyncio.Task] = {}  # campaign_id -> task
 
 
@@ -93,6 +95,19 @@ async def lifespan(app: FastAPI):
     # VAPI
     _vapi = VAPIClient(_settings)
 
+    # Twilio
+    global _twilio
+    if _settings.twilio_account_sid and _settings.twilio_auth_token:
+        _twilio = TwilioService(
+            account_sid=_settings.twilio_account_sid,
+            auth_token=_settings.twilio_auth_token,
+            markup=_settings.phone_number_markup,
+            vapi_api_key=_settings.vapi_api_key,
+        )
+        log.info("twilio_service_ready")
+    else:
+        log.warning("no_twilio_credentials", msg="Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN for phone purchasing")
+
     # ATS Ranker
     if _settings.openai_api_key:
         _ranker = ATSRanker(_settings.openai_api_key)
@@ -101,6 +116,8 @@ async def lifespan(app: FastAPI):
 
     log.info("saas_server_started")
     yield
+    if _twilio:
+        await _twilio.close()
     if _ranker:
         await _ranker.close()
     if _vapi:
@@ -171,10 +188,12 @@ def create_saas_app() -> FastAPI:
 
         # Create or fetch user (use email hash as pseudo google_id)
         db = _require_db()
-        google_id = f"email_{hashlib.sha256(email.encode()).hexdigest()[:16]}"
-        user = await db.create_user(
-            google_id=google_id, email=email, name=name, avatar_url=""
-        )
+        user = await db.get_user_by_email(email)
+        if not user:
+            google_id = f"email_{hashlib.sha256(email.encode()).hexdigest()[:16]}"
+            user = await db.create_user(
+                google_id=google_id, email=email, name=name, avatar_url=""
+            )
 
         token = _auth.create_session_token(user["id"], email)
         response = JSONResponse({"ok": True, "email": email})
@@ -558,6 +577,33 @@ def create_saas_app() -> FastAPI:
         if not campaign:
             raise HTTPException(404, "Campaign not found")
 
+        # ── Require a purchased phone number ──
+        user_phones = await _db.get_phone_numbers(user_id)
+        active_phones = [p for p in user_phones if p.get("vapi_phone_id")]
+        if not active_phones:
+            raise HTTPException(
+                400,
+                "You need to purchase a phone number before starting calls. "
+                "Go to the Phone Numbers tab to buy one.",
+            )
+
+        # Use first active phone number (or allow selecting via body)
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            pass
+        phone_number_id = body.get("phone_number_id")
+        if phone_number_id:
+            chosen = next((p for p in active_phones if p["id"] == phone_number_id), None)
+        else:
+            chosen = active_phones[0]
+
+        if not chosen or not chosen.get("vapi_phone_id"):
+            raise HTTPException(400, "Selected phone number is not registered with VAPI. Please retry registration.")
+
+        vapi_phone_number_id = chosen["vapi_phone_id"]
+
         # Check usage limits
         can_call = await _db.can_place_call(user_id)
         if not can_call:
@@ -602,6 +648,7 @@ def create_saas_app() -> FastAPI:
                         candidate_name=candidate.get("first_name") or candidate["unique_record_id"],
                         record_id=candidate["unique_record_id"],
                         job_role=campaign["job_role"],
+                        phone_number_id=vapi_phone_number_id,
                     )
                     vapi_call_id = result.get("id", "")
                     await _db.mark_call_started(candidate["id"], vapi_call_id)
@@ -701,6 +748,175 @@ def create_saas_app() -> FastAPI:
         user_id = _auth.require_auth(request)
         stats = await _db.get_user_stats(user_id)
         return stats
+
+    # ═══════════════════════════════════════════════════════════
+    #  Phone Number Management routes
+    # ═══════════════════════════════════════════════════════════
+
+    @app.get("/api/phone-numbers")
+    async def list_phone_numbers(request: Request):
+        """List all phone numbers owned by the user."""
+        user_id = _auth.require_auth(request)
+        db = _require_db()
+        numbers = await db.get_phone_numbers(user_id)
+        # Convert Decimal to float for JSON
+        for n in numbers:
+            n["monthly_cost"] = float(n.get("monthly_cost", 0))
+            n["our_price"] = float(n.get("our_price", 0))
+        return {"phone_numbers": numbers}
+
+    @app.post("/api/phone-numbers/search")
+    async def search_phone_numbers(request: Request):
+        """Search available Twilio numbers by country/area code."""
+        user_id = _auth.require_auth(request)
+        if not _twilio:
+            raise HTTPException(503, "Phone number purchasing not configured. Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN.")
+
+        body = await request.json()
+        country = body.get("country_code", "US").upper()
+        area_code = body.get("area_code", "")
+        contains = body.get("contains", "")
+        number_type = body.get("number_type", "Local")
+        limit = min(int(body.get("limit", 20)), 30)
+
+        try:
+            numbers = await _twilio.search_available_numbers(
+                country_code=country,
+                area_code=area_code,
+                contains=contains,
+                number_type=number_type,
+                limit=limit,
+            )
+            return {"numbers": numbers, "country": country}
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/api/phone-numbers/purchase")
+    async def purchase_phone_number(request: Request):
+        """Purchase a phone number from Twilio and register with VAPI."""
+        user_id = _auth.require_auth(request)
+        db = _require_db()
+        if not _twilio:
+            raise HTTPException(503, "Phone number purchasing not configured.")
+
+        body = await request.json()
+        phone_number = body.get("phone_number", "").strip()
+        country_code = body.get("country_code", "US").upper()
+        twilio_price = float(body.get("twilio_price", 1.00))
+        our_price = float(body.get("our_price", 1.50))
+
+        if not phone_number or not phone_number.startswith("+"):
+            raise HTTPException(400, "Valid E.164 phone number required (e.g. +12025551234)")
+
+        try:
+            # 1. Purchase from Twilio
+            twilio_data = await _twilio.purchase_number(phone_number)
+            twilio_sid = twilio_data.get("sid", "")
+            friendly_name = twilio_data.get("friendly_name", phone_number)
+
+            capabilities = {
+                "voice": twilio_data.get("capabilities", {}).get("voice", False),
+                "sms": twilio_data.get("capabilities", {}).get("sms", False),
+                "mms": twilio_data.get("capabilities", {}).get("mms", False),
+            }
+
+            # 2. Register with VAPI for outbound calling
+            vapi_phone_id = ""
+            try:
+                vapi_phone_id = await _twilio.register_with_vapi(
+                    phone_number=phone_number,
+                    twilio_sid=twilio_sid,
+                )
+            except Exception as e:
+                log.error("vapi_registration_failed", phone=phone_number, error=str(e))
+                # Number is purchased — save it without VAPI ID, can retry later
+
+            # 3. Store in our database
+            record = await db.add_phone_number(
+                user_id=user_id,
+                phone_e164=phone_number,
+                friendly_name=friendly_name,
+                country_code=country_code,
+                twilio_sid=twilio_sid,
+                vapi_phone_id=vapi_phone_id,
+                monthly_cost=twilio_price,
+                our_price=our_price,
+                capabilities=capabilities,
+            )
+
+            record["monthly_cost"] = float(record.get("monthly_cost", 0))
+            record["our_price"] = float(record.get("our_price", 0))
+
+            log.info("phone_number_purchased",
+                     user_id=user_id, phone=phone_number,
+                     twilio_sid=twilio_sid, vapi_id=vapi_phone_id)
+
+            return {
+                "status": "purchased",
+                "phone_number": record,
+                "vapi_registered": bool(vapi_phone_id),
+                "message": f"Phone number {phone_number} purchased successfully!",
+            }
+
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except Exception as e:
+            log.error("purchase_failed", phone=phone_number, error=str(e))
+            raise HTTPException(500, f"Purchase failed: {e}")
+
+    @app.delete("/api/phone-numbers/{phone_id}")
+    async def release_phone_number(phone_id: int, request: Request):
+        """Release a phone number — removes from Twilio, VAPI, and our DB."""
+        user_id = _auth.require_auth(request)
+        db = _require_db()
+        if not _twilio:
+            raise HTTPException(503, "Phone number service not configured.")
+
+        record = await db.get_phone_number(phone_id, user_id)
+        if not record:
+            raise HTTPException(404, "Phone number not found")
+
+        # 1. Delete from VAPI
+        if record.get("vapi_phone_id"):
+            await _twilio.delete_from_vapi(record["vapi_phone_id"])
+
+        # 2. Release from Twilio
+        await _twilio.release_number(record["twilio_sid"])
+
+        # 3. Mark released in our DB
+        await db.release_phone_number(phone_id, user_id)
+
+        return {"status": "released", "message": f"Phone number {record['phone_e164']} released."}
+
+    @app.post("/api/phone-numbers/{phone_id}/retry-vapi")
+    async def retry_vapi_registration(phone_id: int, request: Request):
+        """Retry VAPI registration if it failed during purchase."""
+        user_id = _auth.require_auth(request)
+        db = _require_db()
+        if not _twilio:
+            raise HTTPException(503, "Phone service not configured.")
+
+        record = await db.get_phone_number(phone_id, user_id)
+        if not record:
+            raise HTTPException(404, "Phone number not found")
+
+        if record.get("vapi_phone_id"):
+            return {"status": "already_registered", "vapi_phone_id": record["vapi_phone_id"]}
+
+        try:
+            vapi_phone_id = await _twilio.register_with_vapi(
+                phone_number=record["phone_e164"],
+                twilio_sid=record["twilio_sid"],
+            )
+            # Update DB
+            async with db._pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE phone_numbers SET vapi_phone_id = $1 WHERE id = $2",
+                    vapi_phone_id, phone_id,
+                )
+            return {"status": "registered", "vapi_phone_id": vapi_phone_id}
+        except ValueError as e:
+            raise HTTPException(400, str(e))
 
     # ═══════════════════════════════════════════════════════════
     #  Billing routes

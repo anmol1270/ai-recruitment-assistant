@@ -190,9 +190,14 @@ class VAPIClient:
         candidate_name: str = "",
         record_id: str = "",
         job_role: str = "",
+        phone_number_id: str = "",
     ) -> dict:
         """
         Place an outbound call via VAPI.
+
+        Args:
+            phone_number_id: VAPI phone number ID to call from.
+                             Falls back to settings.vapi_phone_number_id if empty.
 
         Returns the VAPI call object (contains 'id', 'status', etc.).
         """
@@ -227,9 +232,12 @@ class VAPIClient:
             "firstMessage": f"Hi {name}! Is this a good time to talk briefly?",
         }
 
+        # Use provided phone_number_id or fall back to global setting
+        caller_phone_id = phone_number_id or self.settings.vapi_phone_number_id
+
         payload = {
             "assistantId": assistant_id,
-            "phoneNumberId": self.settings.vapi_phone_number_id,
+            "phoneNumberId": caller_phone_id,
             "customer": {
                 "number": phone_e164,
             },
