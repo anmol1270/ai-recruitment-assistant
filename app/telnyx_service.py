@@ -111,25 +111,52 @@ class TelnyxService:
                 f"No available numbers for country {country_code}"
             )
 
+        # Log raw response for debug
+        if numbers:
+            log.info("telnyx_search_raw_sample", first_result=numbers[0])
+
         # Get base price for this country
         telnyx_price = self._get_country_price(country_code, number_type)
 
         results = []
         for n in numbers:
             features = n.get("features", [])
+            # Telnyx returns phone_number in E.164 format
             phone_number = n.get("phone_number", "")
-            cost = float(n.get("cost_information", {}).get("monthly_cost", 0) or telnyx_price)
+            best_effort = n.get("best_effort", {})
+            region_info = n.get("region_information", [])
+
+            # Extract cost from Telnyx response
+            cost_info = n.get("cost_information", {})
+            if cost_info and cost_info.get("monthly_cost"):
+                cost = float(cost_info["monthly_cost"])
+            else:
+                cost = telnyx_price
+
+            # Extract region/locality
+            region_name = ""
+            if region_info and isinstance(region_info, list) and len(region_info) > 0:
+                region_name = region_info[0].get("region_name", "") or region_info[0].get("region_type", "")
+
+            # Extract capabilities
+            feature_names = []
+            if isinstance(features, list):
+                for f in features:
+                    if isinstance(f, dict):
+                        feature_names.append(f.get("name", ""))
+                    elif isinstance(f, str):
+                        feature_names.append(f)
 
             results.append({
                 "phone_number": phone_number,
                 "friendly_name": phone_number,
                 "country_code": country_code,
-                "region": n.get("region_information", [{}])[0].get("region_name", "") if n.get("region_information") else "",
+                "region": region_name,
                 "locality": "",
                 "capabilities": {
-                    "voice": "voice" in [f.get("name", "") for f in features],
-                    "sms": "sms" in [f.get("name", "") for f in features],
-                    "mms": "mms" in [f.get("name", "") for f in features],
+                    "voice": "voice" in feature_names,
+                    "sms": "sms" in feature_names,
+                    "mms": "mms" in feature_names,
                 },
                 "number_type": number_type,
                 "telnyx_price": cost,
