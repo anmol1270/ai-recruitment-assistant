@@ -153,6 +153,25 @@ class SaaSDatabase:
             max_size=10,
         )
         async with self._pool.acquire() as conn:
+            # Migrate twilio_sid → telnyx_id BEFORE schema SQL (which references telnyx_id)
+            has_phone_table = await conn.fetchval("""
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_name = 'phone_numbers'
+                )
+            """)
+            if has_phone_table:
+                has_twilio = await conn.fetchval("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'phone_numbers' AND column_name = 'twilio_sid'
+                    )
+                """)
+                if has_twilio:
+                    await conn.execute("ALTER TABLE phone_numbers RENAME COLUMN twilio_sid TO telnyx_id;")
+                    await conn.execute("DROP INDEX IF EXISTS idx_phone_numbers_twilio_sid;")
+                    log.info("migrated_twilio_sid_to_telnyx_id")
+
             await conn.execute(SCHEMA_SQL)
             # Migrate existing TIMESTAMP columns to TIMESTAMPTZ
             await conn.execute("""
@@ -164,18 +183,6 @@ class SaaSDatabase:
                 ALTER TABLE candidates  ALTER COLUMN created_at       TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
                 ALTER TABLE call_logs   ALTER COLUMN created_at       TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
             """)
-            # Migrate twilio_sid → telnyx_id if the old column still exists
-            has_twilio = await conn.fetchval("""
-                SELECT EXISTS (
-                    SELECT 1 FROM information_schema.columns
-                    WHERE table_name = 'phone_numbers' AND column_name = 'twilio_sid'
-                )
-            """)
-            if has_twilio:
-                await conn.execute("ALTER TABLE phone_numbers RENAME COLUMN twilio_sid TO telnyx_id;")
-                await conn.execute("DROP INDEX IF EXISTS idx_phone_numbers_twilio_sid;")
-                await conn.execute("CREATE INDEX IF NOT EXISTS idx_phone_numbers_telnyx_id ON phone_numbers(telnyx_id);")
-                log.info("migrated_twilio_sid_to_telnyx_id")
         log.info("database_connected", url=self.database_url[:30] + "...")
 
     async def close(self) -> None:
