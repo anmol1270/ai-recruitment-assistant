@@ -150,13 +150,34 @@ class TelnyxService:
     async def purchase_number(self, phone_number: str) -> dict:
         """
         Purchase a phone number from Telnyx (create a number order).
+        Re-searches the exact number first so Telnyx's internal cache recognizes it.
         Returns the Telnyx number order resource.
         """
         client = await self._client()
-        url = f"{self.TELNYX_API}/number_orders"
 
+        # Telnyx requires the number to appear in a recent search result.
+        # Re-search for this exact number so it's fresh in their cache.
+        search_url = f"{self.TELNYX_API}/available_phone_numbers"
+        try:
+            search_resp = await client.get(search_url, params={
+                "filter[phone_number][starts_with]": phone_number,
+                "filter[limit]": 1,
+            })
+            search_resp.raise_for_status()
+            search_data = search_resp.json().get("data", [])
+            if not search_data:
+                raise ValueError(f"Number {phone_number} is no longer available on Telnyx")
+            log.info("telnyx_pre_purchase_search_ok", phone=phone_number)
+        except httpx.HTTPStatusError as e:
+            log.warning("telnyx_pre_purchase_search_failed", status=e.response.status_code)
+            # Still attempt the order
+        except ValueError:
+            raise
+
+        url = f"{self.TELNYX_API}/number_orders"
         payload = {
             "phone_numbers": [{"phone_number": phone_number}],
+            "customer_reference": "RecruitAI",
         }
 
         try:
