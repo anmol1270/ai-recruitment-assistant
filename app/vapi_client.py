@@ -37,6 +37,38 @@ RULES:
 - If you detect voicemail, leave a brief message: "Hi {first_name}, this is a call from the recruitment team. We were checking if you're open to new opportunities. No need to call back — we may try again another time. Thanks!"
 """
 
+# Campaign-specific screening prompt template
+CAMPAIGN_SCREENING_PROMPT = """You are a friendly, professional recruitment assistant calling on behalf of a recruitment agency.
+
+You are conducting a preliminary screening call for the following role:
+JOB ROLE: {job_role}
+
+JOB DESCRIPTION:
+{job_description}
+
+Your goal is to have a SHORT preliminary screening call (under 3 minutes). Keep it simple and conversational.
+
+CONVERSATION FLOW:
+1. Greet the candidate by first name: "Hi {{first_name}}, this is an AI assistant calling from the recruitment team. I hope I'm not catching you at a bad time?"
+2. If they say it's a bad time, politely ask when would be better, note it, and end the call.
+3. Briefly mention the role: "We're currently looking for a {job_role} and your profile caught our attention. Are you open to hearing more?"
+4. If they're interested, ask these simple screening questions one at a time (keep each question short):
+{screening_questions}
+5. After the questions, thank them: "Great, thank you for your time! Our team will review your responses and get back to you if there's a good fit."
+6. If NOT interested: "No problem at all. Thanks for letting me know. We'll update our records."
+7. If WRONG NUMBER: Apologise and end politely.
+
+RULES:
+- Be concise and respectful of their time
+- Ask questions ONE AT A TIME — wait for the answer before asking the next
+- Do NOT pressure anyone
+- If they ask to be removed from the list, confirm you'll do so immediately
+- Keep the entire call under 3 minutes
+- Speak naturally and conversationally
+- Do NOT ask overly technical or complex questions — this is a preliminary screening
+- If you detect voicemail, leave a brief message: "Hi {{first_name}}, this is a call from the recruitment team regarding a {job_role} position. No need to call back — we may try again another time. Thanks!"
+"""
+
 # Analysis prompt — VAPI will run this after the call to extract structured data
 ANALYSIS_PROMPT = """Analyze the call transcript carefully and extract the following:
 
@@ -181,6 +213,140 @@ class VAPIClient:
             return self.settings.vapi_assistant_id
         return await self.create_assistant()
 
+    async def create_campaign_assistant(
+        self,
+        campaign_name: str,
+        job_role: str,
+        job_description: str = "",
+        custom_prompt: str = "",
+    ) -> str:
+        """
+        Create a VAPI assistant tailored to a specific campaign's job description.
+        Generates simple preliminary screening questions based on the role.
+        Returns the VAPI assistant ID.
+        """
+        client = await self._client()
+
+        # Build screening questions from the job description
+        screening_questions = self._generate_screening_questions(job_role, job_description, custom_prompt)
+
+        # Build the campaign-specific prompt
+        system_prompt = CAMPAIGN_SCREENING_PROMPT.format(
+            job_role=job_role,
+            job_description=job_description or f"We are hiring for a {job_role} position.",
+            screening_questions=screening_questions,
+        )
+
+        # If user provided a custom prompt, append it
+        if custom_prompt:
+            system_prompt += f"\n\nADDITIONAL INSTRUCTIONS FROM THE RECRUITER:\n{custom_prompt}"
+
+        payload = {
+            "name": f"Screener — {campaign_name[:50]}",
+            "model": {
+                "provider": "openai",
+                "model": "gpt-4o-mini",
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": system_prompt,
+                    }
+                ],
+                "temperature": 0.7,
+            },
+            "voice": {
+                "provider": "11labs",
+                "voiceId": "21m00Tcm4TlvDq8ikWAM",
+            },
+            "firstMessage": "Hello! Is this a good time to talk briefly?",
+            "endCallMessage": "Thanks for your time. Have a great day!",
+            "maxDurationSeconds": 240,  # 4 min cap for screening questions
+            "silenceTimeoutSeconds": 15,
+            "analysisPlan": {
+                "summaryPlan": {
+                    "enabled": True,
+                },
+                "structuredDataPlan": {
+                    "enabled": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "disposition": {
+                                "type": "string",
+                                "enum": [
+                                    "QUALIFIED",
+                                    "PARTIALLY_QUALIFIED",
+                                    "NOT_QUALIFIED",
+                                    "ACTIVE_LOOKING",
+                                    "NOT_LOOKING",
+                                    "CALL_BACK",
+                                    "WRONG_NUMBER",
+                                    "DNC",
+                                ],
+                                "description": "The call disposition and qualification status",
+                            },
+                            "summary": {
+                                "type": "string",
+                                "description": "1-2 sentence summary including qualification assessment",
+                            },
+                            "location": {
+                                "type": "string",
+                                "description": "Location/area mentioned by candidate",
+                            },
+                            "availability": {
+                                "type": "string",
+                                "description": "Availability or timeline mentioned",
+                            },
+                        },
+                    },
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": ANALYSIS_PROMPT,
+                        }
+                    ],
+                },
+            },
+            "serverUrl": f"{self.settings.webhook_base_url}/webhook/vapi",
+        }
+
+        resp = await client.post("/assistant", json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+        assistant_id = data["id"]
+        log.info("campaign_assistant_created", assistant_id=assistant_id, campaign=campaign_name)
+        return assistant_id
+
+    @staticmethod
+    def _generate_screening_questions(
+        job_role: str,
+        job_description: str = "",
+        custom_prompt: str = "",
+    ) -> str:
+        """
+        Generate simple preliminary screening questions based on the job role
+        and description. Returns a formatted string of numbered questions.
+        """
+        questions = []
+
+        # Always ask about interest/availability
+        questions.append(f'   a. "Are you currently open to new opportunities, specifically for a {job_role} role?"')
+
+        # Ask about relevant experience
+        questions.append(f'   b. "Could you briefly tell me about your experience related to {job_role}?"')
+
+        # Ask about location/remote preference
+        questions.append('   c. "What location or work arrangement are you looking for — on-site, remote, or hybrid?"')
+
+        # Ask about availability/notice period
+        questions.append('   d. "If things moved forward, how soon could you start or what would your notice period be?"')
+
+        # If there's a job description, add one role-specific question
+        if job_description and len(job_description.strip()) > 20:
+            questions.append(f'   e. "Based on the role requirements, could you share what you think makes you a good fit for this position?"')
+
+        return "\n".join(questions)
+
     # ── Outbound calls ──────────────────────────────────────────
 
     async def place_call(
@@ -195,6 +361,10 @@ class VAPIClient:
         """
         Place an outbound call via VAPI.
 
+        The assistant_id should be a campaign-specific assistant that already
+        has the job-description-aware prompt baked in. We only override the
+        firstMessage to personalise with the candidate's name.
+
         Args:
             phone_number_id: VAPI phone number ID to call from.
                              Falls back to settings.vapi_phone_number_id if empty.
@@ -203,32 +373,11 @@ class VAPIClient:
         """
         client = await self._client()
 
-        # Build a job-role-aware, personalised prompt
-        assistant_overrides = {}
         name = candidate_name or "there"
-        role = job_role or "open"
 
-        job_role_section = ""
-        if job_role:
-            job_role_section = f"JOB ROLE: {job_role}\nYou are screening candidates specifically for this role. Ask about their relevant experience and assess their fit."
-
-        personalised_prompt = (
-            RECRUITMENT_SYSTEM_PROMPT
-            .replace("{first_name}", name)
-            .replace("{job_role}", role)
-            .replace("{job_role_section}", job_role_section)
-        )
+        # Only override the greeting with the candidate's name —
+        # the campaign assistant already has the right screening prompt
         assistant_overrides = {
-            "model": {
-                "provider": "openai",
-                "model": "gpt-4o-mini",
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": personalised_prompt,
-                    }
-                ],
-            },
             "firstMessage": f"Hi {name}! Is this a good time to talk briefly?",
         }
 

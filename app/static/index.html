@@ -759,7 +759,7 @@ tr:hover { background: var(--surface2); }
           <button class="btn btn-primary btn-sm" onclick="openBuyPhoneModal()">+ Buy New Number</button>
         </div>
         <p style="color:var(--text-dim);font-size:13px;margin-bottom:16px">
-          You need at least one phone number to start making calls. Numbers are purchased via Twilio with a $0.50/mo platform fee.
+          You need at least one phone number to start making calls. Numbers are purchased via Telnyx with a $0.50/mo platform fee.
         </p>
         <div id="myPhoneNumbers">
           <div style="text-align:center;padding:40px;color:var(--text-dim)">Loading...</div>
@@ -1471,7 +1471,7 @@ async function searchPhoneNumbers() {
 
   btn.disabled = true;
   btn.textContent = '⏳ Searching...';
-  results.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-dim)">Searching Twilio for available numbers...</div>';
+  results.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-dim)">Searching Telnyx for available numbers...</div>';
 
   try {
     var resp = await fetch('/api/phone-numbers/search', {
@@ -1506,9 +1506,9 @@ async function searchPhoneNumbers() {
         '<div style="display:flex;align-items:center;gap:8px">' +
           '<div style="text-align:right">' +
             '<span class="ps-price">$' + n.our_price.toFixed(2) + '/mo</span>' +
-            '<div style="font-size:10px;color:var(--text-dim)">Twilio: $' + n.twilio_price.toFixed(2) + ' + $' + n.markup.toFixed(2) + ' fee</div>' +
+            '<div style="font-size:10px;color:var(--text-dim)">Telnyx: $' + n.telnyx_price.toFixed(2) + ' + $' + n.markup.toFixed(2) + ' fee</div>' +
           '</div>' +
-          '<button class="btn btn-success btn-sm" onclick="buyPhoneNumber(\'' + esc(n.phone_number) + '\', \'' + country + '\', ' + n.twilio_price + ', ' + n.our_price + ')">Buy</button>' +
+          '<button class="btn btn-success btn-sm" onclick="buyPhoneNumber(\'' + esc(n.phone_number) + '\', \'' + country + '\', ' + n.telnyx_price + ', ' + n.our_price + ')">Buy</button>' +
         '</div>' +
       '</div>';
     }).join('');
@@ -1520,7 +1520,7 @@ async function searchPhoneNumbers() {
   }
 }
 
-async function buyPhoneNumber(phoneNumber, countryCode, twilioPrice, ourPrice) {
+async function buyPhoneNumber(phoneNumber, countryCode, telnyxPrice, ourPrice) {
   if (!confirm('Purchase ' + phoneNumber + ' for $' + ourPrice.toFixed(2) + '/month?')) return;
 
   try {
@@ -1531,7 +1531,7 @@ async function buyPhoneNumber(phoneNumber, countryCode, twilioPrice, ourPrice) {
       body: JSON.stringify({
         phone_number: phoneNumber,
         country_code: countryCode,
-        twilio_price: twilioPrice,
+        telnyx_price: telnyxPrice,
         our_price: ourPrice
       })
     });
@@ -1550,7 +1550,7 @@ async function buyPhoneNumber(phoneNumber, countryCode, twilioPrice, ourPrice) {
 }
 
 async function releasePhoneNumber(phoneId, phoneE164) {
-  if (!confirm('Release ' + phoneE164 + '? This will remove the number from Twilio and you will lose it.')) return;
+  if (!confirm('Release ' + phoneE164 + '? This will remove the number from Telnyx and you will lose it.')) return;
 
   try {
     var resp = await fetch('/api/phone-numbers/' + phoneId, { method: 'DELETE' });

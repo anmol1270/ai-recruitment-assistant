@@ -122,7 +122,7 @@ CREATE TABLE IF NOT EXISTS phone_numbers (
     phone_e164      VARCHAR(50) NOT NULL,
     friendly_name   VARCHAR(255) DEFAULT '',
     country_code    VARCHAR(5) DEFAULT '',
-    twilio_sid      VARCHAR(255) UNIQUE NOT NULL,
+    telnyx_id       VARCHAR(255) UNIQUE NOT NULL,
     vapi_phone_id   VARCHAR(255) DEFAULT '',
     monthly_cost    NUMERIC(10,2) DEFAULT 0,
     our_price       NUMERIC(10,2) DEFAULT 0,
@@ -134,7 +134,7 @@ CREATE TABLE IF NOT EXISTS phone_numbers (
 CREATE INDEX IF NOT EXISTS idx_resume_rankings_campaign ON resume_rankings(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_resume_rankings_selected ON resume_rankings(campaign_id, selected);
 CREATE INDEX IF NOT EXISTS idx_phone_numbers_user ON phone_numbers(user_id);
-CREATE INDEX IF NOT EXISTS idx_phone_numbers_twilio_sid ON phone_numbers(twilio_sid);
+CREATE INDEX IF NOT EXISTS idx_phone_numbers_telnyx_id ON phone_numbers(telnyx_id);
 """
 
 
@@ -656,7 +656,7 @@ class SaaSDatabase:
         phone_e164: str,
         friendly_name: str,
         country_code: str,
-        twilio_sid: str,
+        telnyx_id: str,
         vapi_phone_id: str,
         monthly_cost: float,
         our_price: float,
@@ -667,11 +667,11 @@ class SaaSDatabase:
             row = await conn.fetchrow(
                 """INSERT INTO phone_numbers
                    (user_id, phone_e164, friendly_name, country_code,
-                    twilio_sid, vapi_phone_id, monthly_cost, our_price, capabilities)
+                    telnyx_id, vapi_phone_id, monthly_cost, our_price, capabilities)
                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)
                    RETURNING *""",
                 user_id, phone_e164, friendly_name, country_code,
-                twilio_sid, vapi_phone_id, monthly_cost, our_price,
+                telnyx_id, vapi_phone_id, monthly_cost, our_price,
                 _json.dumps(capabilities or {}),
             )
             return dict(row)

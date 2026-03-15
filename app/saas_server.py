@@ -39,7 +39,7 @@ from app.phone_utils import normalise_phone
 from app.resume_parser import parse_resumes_from_zip
 from app.ats_ranker import ATSRanker
 from app.saas_db import SaaSDatabase
-from app.twilio_service import TwilioService
+from app.telnyx_service import TelnyxService
 from app.vapi_client import VAPIClient
 from app.webhook import (
     _parse_disposition_from_analysis,
@@ -58,7 +58,7 @@ _auth: Optional[AuthManager] = None
 _billing: Optional[BillingManager] = None
 _vapi: Optional[VAPIClient] = None
 _ranker: Optional[ATSRanker] = None
-_twilio: Optional[TwilioService] = None
+_telnyx: Optional[TelnyxService] = None
 _active_tasks: dict[int, asyncio.Task] = {}  # campaign_id -> task
 
 
@@ -95,18 +95,17 @@ async def lifespan(app: FastAPI):
     # VAPI
     _vapi = VAPIClient(_settings)
 
-    # Twilio
-    global _twilio
-    if _settings.twilio_account_sid and _settings.twilio_auth_token:
-        _twilio = TwilioService(
-            account_sid=_settings.twilio_account_sid,
-            auth_token=_settings.twilio_auth_token,
+    # Telnyx
+    global _telnyx
+    if _settings.telnyx_api_key:
+        _telnyx = TelnyxService(
+            api_key=_settings.telnyx_api_key,
             markup=_settings.phone_number_markup,
             vapi_api_key=_settings.vapi_api_key,
         )
-        log.info("twilio_service_ready")
+        log.info("telnyx_service_ready")
     else:
-        log.warning("no_twilio_credentials", msg="Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN for phone purchasing")
+        log.warning("no_telnyx_credentials", msg="Set TELNYX_API_KEY for phone purchasing")
 
     # ATS Ranker
     if _settings.openai_api_key:
@@ -116,8 +115,8 @@ async def lifespan(app: FastAPI):
 
     log.info("saas_server_started")
     yield
-    if _twilio:
-        await _twilio.close()
+    if _telnyx:
+        await _telnyx.close()
     if _ranker:
         await _ranker.close()
     if _vapi:
@@ -617,10 +616,16 @@ def create_saas_app() -> FastAPI:
             return {"status": "already_running"}
 
         # Get or create VAPI assistant for this campaign
+        # Re-uses the existing assistant if one was already created for this campaign
         assistant_id = campaign.get("vapi_assistant_id", "")
         if not assistant_id:
             try:
-                assistant_id = await _vapi.create_assistant()
+                assistant_id = await _vapi.create_campaign_assistant(
+                    campaign_name=campaign["name"],
+                    job_role=campaign["job_role"],
+                    job_description=campaign.get("description", ""),
+                    custom_prompt=campaign.get("custom_prompt", ""),
+                )
                 await _db.update_campaign_assistant(campaign_id, assistant_id)
             except Exception as e:
                 log.error("vapi_assistant_creation_failed", error=str(e))
@@ -767,10 +772,10 @@ def create_saas_app() -> FastAPI:
 
     @app.post("/api/phone-numbers/search")
     async def search_phone_numbers(request: Request):
-        """Search available Twilio numbers by country/area code."""
+        """Search available Telnyx numbers by country/area code."""
         user_id = _auth.require_auth(request)
-        if not _twilio:
-            raise HTTPException(503, "Phone number purchasing not configured. Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN.")
+        if not _telnyx:
+            raise HTTPException(503, "Phone number purchasing not configured. Set TELNYX_API_KEY.")
 
         body = await request.json()
         country = body.get("country_code", "US").upper()
@@ -780,7 +785,7 @@ def create_saas_app() -> FastAPI:
         limit = min(int(body.get("limit", 20)), 30)
 
         try:
-            numbers = await _twilio.search_available_numbers(
+            numbers = await _telnyx.search_available_numbers(
                 country_code=country,
                 area_code=area_code,
                 contains=contains,
@@ -793,39 +798,44 @@ def create_saas_app() -> FastAPI:
 
     @app.post("/api/phone-numbers/purchase")
     async def purchase_phone_number(request: Request):
-        """Purchase a phone number from Twilio and register with VAPI."""
+        """Purchase a phone number from Telnyx and register with VAPI."""
         user_id = _auth.require_auth(request)
         db = _require_db()
-        if not _twilio:
+        if not _telnyx:
             raise HTTPException(503, "Phone number purchasing not configured.")
 
         body = await request.json()
         phone_number = body.get("phone_number", "").strip()
         country_code = body.get("country_code", "US").upper()
-        twilio_price = float(body.get("twilio_price", 1.00))
+        telnyx_price = float(body.get("telnyx_price", 1.00))
         our_price = float(body.get("our_price", 1.50))
 
         if not phone_number or not phone_number.startswith("+"):
             raise HTTPException(400, "Valid E.164 phone number required (e.g. +12025551234)")
 
         try:
-            # 1. Purchase from Twilio
-            twilio_data = await _twilio.purchase_number(phone_number)
-            twilio_sid = twilio_data.get("sid", "")
-            friendly_name = twilio_data.get("friendly_name", phone_number)
+            # 1. Purchase from Telnyx
+            telnyx_data = await _telnyx.purchase_number(phone_number)
+            telnyx_id = telnyx_data.get("sid", "")
+            friendly_name = telnyx_data.get("friendly_name", phone_number)
 
-            capabilities = {
-                "voice": twilio_data.get("capabilities", {}).get("voice", False),
-                "sms": twilio_data.get("capabilities", {}).get("sms", False),
-                "mms": twilio_data.get("capabilities", {}).get("mms", False),
-            }
+            capabilities_raw = telnyx_data.get("capabilities", [])
+            if isinstance(capabilities_raw, dict):
+                capabilities = capabilities_raw
+            else:
+                feature_names = [f.get("name", "") if isinstance(f, dict) else str(f) for f in capabilities_raw]
+                capabilities = {
+                    "voice": "voice" in feature_names,
+                    "sms": "sms" in feature_names,
+                    "mms": "mms" in feature_names,
+                }
 
             # 2. Register with VAPI for outbound calling
             vapi_phone_id = ""
             try:
-                vapi_phone_id = await _twilio.register_with_vapi(
+                vapi_phone_id = await _telnyx.register_with_vapi(
                     phone_number=phone_number,
-                    twilio_sid=twilio_sid,
+                    telnyx_id=telnyx_id,
                 )
             except Exception as e:
                 log.error("vapi_registration_failed", phone=phone_number, error=str(e))
@@ -837,9 +847,9 @@ def create_saas_app() -> FastAPI:
                 phone_e164=phone_number,
                 friendly_name=friendly_name,
                 country_code=country_code,
-                twilio_sid=twilio_sid,
+                telnyx_id=telnyx_id,
                 vapi_phone_id=vapi_phone_id,
-                monthly_cost=twilio_price,
+                monthly_cost=telnyx_price,
                 our_price=our_price,
                 capabilities=capabilities,
             )
@@ -849,7 +859,7 @@ def create_saas_app() -> FastAPI:
 
             log.info("phone_number_purchased",
                      user_id=user_id, phone=phone_number,
-                     twilio_sid=twilio_sid, vapi_id=vapi_phone_id)
+                     telnyx_id=telnyx_id, vapi_id=vapi_phone_id)
 
             return {
                 "status": "purchased",
@@ -866,10 +876,10 @@ def create_saas_app() -> FastAPI:
 
     @app.delete("/api/phone-numbers/{phone_id}")
     async def release_phone_number(phone_id: int, request: Request):
-        """Release a phone number — removes from Twilio, VAPI, and our DB."""
+        """Release a phone number — removes from Telnyx, VAPI, and our DB."""
         user_id = _auth.require_auth(request)
         db = _require_db()
-        if not _twilio:
+        if not _telnyx:
             raise HTTPException(503, "Phone number service not configured.")
 
         record = await db.get_phone_number(phone_id, user_id)
@@ -878,10 +888,10 @@ def create_saas_app() -> FastAPI:
 
         # 1. Delete from VAPI
         if record.get("vapi_phone_id"):
-            await _twilio.delete_from_vapi(record["vapi_phone_id"])
+            await _telnyx.delete_from_vapi(record["vapi_phone_id"])
 
-        # 2. Release from Twilio
-        await _twilio.release_number(record["twilio_sid"])
+        # 2. Release from Telnyx
+        await _telnyx.release_number(record["telnyx_id"])
 
         # 3. Mark released in our DB
         await db.release_phone_number(phone_id, user_id)
@@ -893,7 +903,7 @@ def create_saas_app() -> FastAPI:
         """Retry VAPI registration if it failed during purchase."""
         user_id = _auth.require_auth(request)
         db = _require_db()
-        if not _twilio:
+        if not _telnyx:
             raise HTTPException(503, "Phone service not configured.")
 
         record = await db.get_phone_number(phone_id, user_id)
@@ -904,9 +914,9 @@ def create_saas_app() -> FastAPI:
             return {"status": "already_registered", "vapi_phone_id": record["vapi_phone_id"]}
 
         try:
-            vapi_phone_id = await _twilio.register_with_vapi(
+            vapi_phone_id = await _telnyx.register_with_vapi(
                 phone_number=record["phone_e164"],
-                twilio_sid=record["twilio_sid"],
+                telnyx_id=record["telnyx_id"],
             )
             # Update DB
             async with db._pool.acquire() as conn:
