@@ -131,7 +131,8 @@ class ATSRanker:
                         {"role": "user", "content": prompt},
                     ],
                     "temperature": 0.3,
-                    "max_tokens": 500,
+                    "max_tokens": 1024,
+                    "response_format": {"type": "json_object"},
                 },
             )
             resp.raise_for_status()
@@ -142,6 +143,12 @@ class ATSRanker:
             if content.startswith("```"):
                 content = re.sub(r"^```(?:json)?\s*", "", content)
                 content = re.sub(r"\s*```$", "", content)
+
+            # Extract JSON object if surrounded by extra text
+            brace_start = content.find("{")
+            brace_end = content.rfind("}")
+            if brace_start != -1 and brace_end != -1 and brace_end > brace_start:
+                content = content[brace_start : brace_end + 1]
 
             result = json.loads(content)
 
@@ -194,13 +201,21 @@ class ATSRanker:
 
         async def _score_one(resume: dict) -> dict:
             async with sem:
-                log.info("scoring_resume", filename=resume["filename"])
-                score_data = await self.score_resume(resume["text"], job_description)
-                return {
-                    "filename": resume["filename"],
-                    "resume_text": resume["text"][:500],  # Preview only
-                    **score_data,
-                }
+                try:
+                    log.info("scoring_resume", filename=resume["filename"])
+                    score_data = await self.score_resume(resume["text"], job_description)
+                    return {
+                        "filename": resume["filename"],
+                        "resume_text": resume["text"][:500],  # Preview only
+                        **score_data,
+                    }
+                except Exception as e:
+                    log.error("score_one_error", filename=resume.get("filename"), error=str(e))
+                    return {
+                        "filename": resume.get("filename", "unknown"),
+                        "resume_text": resume.get("text", "")[:500],
+                        **_empty_result(f"Scoring failed: {e}"),
+                    }
 
         # Score all resumes concurrently
         tasks = [_score_one(r) for r in resumes if r.get("text")]
