@@ -49,7 +49,7 @@ Given a RESUME and a JOB DESCRIPTION, do the following:
 4. **Reasoning**: A brief 1-2 sentence explanation of the score
 
 Respond ONLY with valid JSON in this exact format:
-{
+{{
   "full_name": "...",
   "email": "...",
   "phone": "...",
@@ -61,7 +61,7 @@ Respond ONLY with valid JSON in this exact format:
   "overall_suitability": 0,
   "total_score": 0,
   "reasoning": "..."
-}
+}}
 
 JOB DESCRIPTION:
 ---
