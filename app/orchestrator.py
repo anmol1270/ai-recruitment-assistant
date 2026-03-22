@@ -18,7 +18,7 @@ from app.database import Database
 from app.models import CallRecord, Disposition
 from app.output import generate_output_csv, generate_rejected_csv, generate_run_summary
 from app.scheduler import CallScheduler
-from app.vapi_client import VAPIClient
+from app.twilio_service import TwilioService
 
 log = structlog.get_logger(__name__)
 
@@ -40,29 +40,26 @@ class Orchestrator:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.db = Database(settings.database_path)
-        self.vapi = VAPIClient(settings)
+        self.twilio = TwilioService(settings)
         self.scheduler: CallScheduler | None = None
-        self._assistant_id: str = ""
         self._run_id: str = ""
 
     async def start(self) -> None:
-        """Initialise database connection and VAPI assistant."""
+        """Initialise database connection and Twilio service."""
         self.settings.ensure_dirs()
         await self.db.connect()
-        self._assistant_id = await self.vapi.get_or_create_assistant()
         self._run_id = uuid.uuid4().hex[:12]
         self.scheduler = CallScheduler(
-            self.settings, self.db, self.vapi, self._run_id
+            self.settings, self.db, self.twilio, self._run_id
         )
         log.info(
             "orchestrator_started",
             run_id=self._run_id,
-            assistant_id=self._assistant_id,
         )
 
     async def stop(self) -> None:
         """Clean up resources."""
-        await self.vapi.close()
+        await self.twilio.close()
         await self.db.close()
         log.info("orchestrator_stopped", run_id=self._run_id)
 
@@ -123,7 +120,7 @@ class Orchestrator:
             log.info("outside_calling_window")
             return {"placed": 0, "note": "Outside UK calling window"}
 
-        return await self.scheduler.run_batch(self._assistant_id)
+        return await self.scheduler.run_batch()
 
     async def run_continuous(
         self,
@@ -160,7 +157,7 @@ class Orchestrator:
                 break
 
             # Run a batch
-            batch_stats = await self.scheduler.run_batch(self._assistant_id)
+            batch_stats = await self.scheduler.run_batch()
             batch_count += 1
 
             for key in total_stats:

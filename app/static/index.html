@@ -636,24 +636,24 @@ tr:hover { background: var(--surface2); }
       </div>
 
       <div class="card" style="display:flex;flex-wrap:wrap;gap:12px;align-items:center">
-        <button class="btn btn-primary" id="btnUploadCSV" onclick="document.getElementById('csvFileInput').click()">📁 Upload CSV</button>
-        <input type="file" id="csvFileInput" accept=".csv" style="display:none" onchange="uploadCSV(this)">
-        <button class="btn btn-primary" onclick="document.getElementById('resumeZipInput').click()">📄 Upload Resumes (ZIP)</button>
-        <input type="file" id="resumeZipInput" accept=".zip" style="display:none" onchange="uploadResumes(this)">
+        <button class="btn btn-primary" id="btnUploadProcess" onclick="document.getElementById('resumeZipInput').click()">📄 Upload Resumes (ZIP)</button>
+        <input type="file" id="resumeZipInput" accept=".zip" style="display:none" onchange="processResumes(this)">
         <button class="btn btn-success" id="btnStartCalls" onclick="startCampaignCalls()">📞 Start Calls</button>
         <button class="btn btn-outline" onclick="refreshCampaignDetail()">🔄 Refresh</button>
         <button class="btn btn-outline" onclick="exportCampaign()">📥 Export CSV</button>
         <button class="btn btn-danger btn-sm" onclick="deleteCampaign()" style="margin-left:auto">🗑 Delete</button>
       </div>
 
+      <!-- Processing Status -->
+      <div class="card" id="processStatusCard" style="display:none">
+        <div id="processStatus" style="text-align:center;padding:20px;color:var(--text-dim)"></div>
+      </div>
+
       <!-- Resume Rankings Section -->
       <div class="card" id="rankingsSection" style="display:none">
         <div class="card-title" style="display:flex;justify-content:space-between;align-items:center">
           <span>📊 AI Resume Rankings</span>
-          <div style="display:flex;gap:8px">
-            <button class="btn btn-success btn-sm" id="btnPromoteRankings" onclick="promoteRankings()">✅ Promote Top Candidates to Calls</button>
-            <button class="btn btn-outline btn-sm" onclick="loadRankings()">🔄 Refresh</button>
-          </div>
+          <button class="btn btn-outline btn-sm" onclick="loadRankings()">🔄 Refresh</button>
         </div>
         <div class="ranking-stats-bar" id="rankingStatsBar"></div>
         <div id="rankingsList"></div>
@@ -663,11 +663,11 @@ tr:hover { background: var(--surface2); }
         <div class="upload-zone" id="uploadZone"
              ondragover="event.preventDefault();this.classList.add('dragover')"
              ondragleave="this.classList.remove('dragover')"
-             ondrop="handleDrop(event)">
+             ondrop="handleDropZip(event)">
           <div style="font-size:32px">📂</div>
-          <p>Drag & drop a CSV file here, or click "Upload CSV" above</p>
-          <p style="font-size:12px;margin-top:8px">CSV: phone (required), first_name, last_name, email</p>
-          <p style="font-size:12px;margin-top:4px">ZIP: Upload resumes (PDF/DOCX) — AI will rank them and select top 30%</p>
+          <p>Drag & drop a ZIP file of resumes here</p>
+          <p style="font-size:12px;margin-top:8px">Supported: PDF, DOCX, TXT files inside a ZIP archive</p>
+          <p style="font-size:12px;margin-top:4px">AI will rank resumes against your job description, then buy a number and start calling</p>
         </div>
       </div>
 
@@ -818,8 +818,8 @@ tr:hover { background: var(--surface2); }
       <input type="text" id="ncJobRole" placeholder="e.g., Senior React Developer">
     </div>
     <div class="form-group">
-      <label>Description (optional)</label>
-      <textarea id="ncDescription" rows="3" placeholder="Brief description of the role..."></textarea>
+      <label>Job Description *</label>
+      <textarea id="ncDescription" rows="6" placeholder="Paste the full job description here. The AI will use this to rank resumes and screen candidates on calls..."></textarea>
     </div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeNewCampaignModal()">Cancel</button>
@@ -955,8 +955,8 @@ function showPage(page) {
   if (nav) nav.classList.add('active');
   if (page === 'dashboard') loadDashboard();
   if (page === 'campaigns') loadCampaigns();
-  if (page === 'billing') loadBilling();
   if (page === 'phones') loadPhoneNumbers();
+  if (page === 'billing') loadBilling();
 }
 
 /* DASHBOARD */
@@ -1039,6 +1039,7 @@ async function createCampaign() {
   var jobRole = document.getElementById('ncJobRole').value.trim();
   var description = document.getElementById('ncDescription').value.trim();
   if (!name || !jobRole) { toast('Name and Job Role are required', 'error'); return; }
+  if (!description) { toast('Job Description is required — it\u2019s used for AI ranking', 'error'); return; }
   try {
     var resp = await fetch('/api/campaigns', {
       method: 'POST',
@@ -1113,57 +1114,79 @@ async function refreshCampaignDetail() {
   } catch (err) { toast('Failed to load campaign: ' + err.message, 'error'); }
 }
 
-/* Upload CSV */
-function handleDrop(e) {
+/* Upload Resumes ZIP — drag & drop handler */
+function handleDropZip(e) {
   e.preventDefault();
   e.target.closest('.upload-zone').classList.remove('dragover');
   var file = e.dataTransfer.files[0];
-  if (file) uploadCSVFile(file);
+  if (file) processResumeFile(file);
 }
-function uploadCSV(input) {
+
+/* Process Resumes: Upload ZIP → AI rank → auto-promote → auto-call */
+function processResumes(input) {
   var file = input.files[0];
-  if (file) uploadCSVFile(file);
   input.value = '';
+  if (file) processResumeFile(file);
 }
-async function uploadCSVFile(file) {
+
+async function processResumeFile(file) {
   if (!currentCampaignId) return;
-  if (!file.name.endsWith('.csv')) { toast('Please upload a .csv file', 'error'); return; }
-  var formData = new FormData();
-  formData.append('file', file);
-  try {
-    toast('Uploading...', 'info');
-    var resp = await fetch('/api/campaigns/' + currentCampaignId + '/upload', { method: 'POST', body: formData });
-    var data = await resp.json();
-    if (!resp.ok) throw new Error(data.detail || 'Upload failed');
-    toast('Uploaded ' + data.valid_records + ' candidates (' + data.rejected_records + ' rejected)', 'success');
-    refreshCampaignDetail();
-  } catch (err) { toast(err.message, 'error'); }
-}
-
-/* Upload Resumes (ZIP) */
-async function uploadResumes(input) {
-  var file = input.files[0];
-  input.value = '';
-  if (!file || !currentCampaignId) return;
-  if (!file.name.toLowerCase().endsWith('.zip')) { toast('Please upload a .zip file', 'error'); return; }
+  if (!file.name.toLowerCase().endsWith('.zip')) { toast('Please upload a .zip file containing resumes', 'error'); return; }
 
   var formData = new FormData();
   formData.append('file', file);
 
+  // Get job description from campaign (already stored when creating)
+  // Optionally prompt for updated JD
+  formData.append('job_description', '');  // Use campaign's stored description
+
   try {
-    toast('Uploading & ranking resumes... This may take a minute.', 'info');
+    toast('Processing resumes... Parsing and ranking with AI.', 'info');
+    document.getElementById('processStatusCard').style.display = 'block';
+    document.getElementById('processStatus').innerHTML = '<div style="font-size:32px;margin-bottom:12px">🧠</div>AI is parsing and ranking resumes against the job description...<br><small>This usually takes 5-30 seconds per resume.</small>';
+    document.getElementById('btnUploadProcess').disabled = true;
+    document.getElementById('btnUploadProcess').textContent = '⏳ Processing...';
     document.getElementById('rankingsSection').style.display = 'block';
-    document.getElementById('rankingsList').innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-dim)"><div style="font-size:32px;margin-bottom:12px">🧠</div>AI is analyzing resumes against the job description...<br><small>This usually takes 5-30 seconds per resume</small></div>';
+    document.getElementById('rankingsList').innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-dim)">Analyzing resumes...</div>';
 
-    var resp = await fetch('/api/campaigns/' + currentCampaignId + '/upload-resumes', { method: 'POST', body: formData });
+    var resp = await fetch('/api/campaigns/' + currentCampaignId + '/process', { method: 'POST', body: formData });
     var data = await resp.json();
-    if (!resp.ok) throw new Error(data.detail || 'Upload failed');
+    if (!resp.ok) throw new Error(data.detail || 'Processing failed');
 
-    toast('Ranked ' + data.stats.total_resumes + ' resumes — ' + data.stats.selected_count + ' selected (top ' + data.stats.top_percent + '%)', 'success');
-    renderRankings(data.rankings, data.stats);
+    // Show success status
+    var statusHtml = '<div style="color:var(--success);font-size:16px;font-weight:600">✓ ' + esc(data.message) + '</div>';
+    if (data.skipped_no_phone > 0) {
+      statusHtml += '<div style="color:var(--warning);font-size:13px;margin-top:8px">⚠ ' + data.skipped_no_phone + ' candidates skipped (no valid phone number in resume)</div>';
+    }
+    if (data.parse_errors && data.parse_errors.length > 0) {
+      statusHtml += '<div style="color:var(--text-dim);font-size:12px;margin-top:8px">' + data.parse_errors.length + ' files could not be parsed</div>';
+    }
+    // Prompt user for next step
+    if (!data.has_phone_number) {
+      statusHtml += '<div style="margin-top:16px;padding:16px;background:var(--surface2);border-radius:var(--radius-sm);border:1px solid var(--warning)">' +
+        '<div style="font-weight:600;margin-bottom:8px">📞 Next Step: Buy a Phone Number</div>' +
+        '<p style="color:var(--text-dim);font-size:13px;margin-bottom:12px">You need a phone number to start calling candidates.</p>' +
+        '<button class="btn btn-primary btn-sm" onclick="showPage(\'phones\')">📞 Buy a Number</button>' +
+      '</div>';
+    } else {
+      statusHtml += '<div style="margin-top:16px;padding:16px;background:var(--surface2);border-radius:var(--radius-sm);border:1px solid var(--success)">' +
+        '<div style="font-weight:600;margin-bottom:8px">✅ Ready to Call</div>' +
+        '<p style="color:var(--text-dim);font-size:13px;margin-bottom:12px">' + data.candidates_promoted + ' candidates ready. Click Start Calls to begin.</p>' +
+        '<button class="btn btn-success btn-sm" onclick="startCampaignCalls()">📞 Start Calls Now</button>' +
+      '</div>';
+    }
+    document.getElementById('processStatus').innerHTML = statusHtml;
+
+    toast(data.message, 'success');
+
+    // Refresh to load rankings and candidates
+    await refreshCampaignDetail();
   } catch (err) {
     toast(err.message, 'error');
-    document.getElementById('rankingsList').innerHTML = '<div style="text-align:center;padding:20px;color:#d63031">Error: ' + esc(err.message) + '</div>';
+    document.getElementById('processStatus').innerHTML = '<div style="color:var(--danger)">✗ ' + esc(err.message) + '</div>';
+  } finally {
+    document.getElementById('btnUploadProcess').disabled = false;
+    document.getElementById('btnUploadProcess').textContent = '📄 Upload Resumes (ZIP)';
   }
 }
 
@@ -1226,25 +1249,7 @@ function renderRankings(rankings, stats) {
   document.getElementById('rankingsList').innerHTML = html;
 }
 
-/* Promote Rankings to Calling Pipeline */
-async function promoteRankings() {
-  if (!currentCampaignId) return;
-  if (!confirm('This will add the top-ranked candidates (with phone numbers) to the calling pipeline. Continue?')) return;
-  try {
-    var resp = await fetch('/api/campaigns/' + currentCampaignId + '/promote-rankings', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({})
-    });
-    var data = await resp.json();
-    if (!resp.ok) throw new Error(data.detail || 'Failed');
-    toast(data.message || 'Candidates promoted!', 'success');
-    await refreshCampaignDetail();
-    await loadRankings();
-  } catch (err) { toast(err.message, 'error'); }
-}
-
-/* Start calls */
+/* Start calls (manual re-start for remaining candidates) */
 async function startCampaignCalls() {
   if (!currentCampaignId) return;
   try {

@@ -3,11 +3,12 @@ SaaS server — multi-tenant AI Recruitment Caller platform.
 
 Routes:
   Auth:     /auth/login, /auth/callback, /auth/logout, /auth/me
-  Campaign: /api/campaigns (CRUD), /api/campaigns/:id/upload, /api/campaigns/:id/start
+  Campaign: /api/campaigns (CRUD), /api/campaigns/:id/process (upload+rank+call)
   Status:   /api/campaigns/:id/status, /api/campaigns/:id/candidates
   Export:   /api/campaigns/:id/export
   Billing:  /api/billing/checkout, /api/billing/portal, /webhook/stripe
-  Webhook:  /webhook/vapi
+  Webhook:  /webhook/twilio/voice, /webhook/twilio/status
+  WS:       /ws/media-stream (Twilio ↔ OpenAI Realtime)
   UI:       / (dashboard)
 """
 
@@ -27,8 +28,8 @@ from pathlib import Path
 from typing import Optional
 
 import structlog
-from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile, WebSocket
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.auth import AuthManager
@@ -39,14 +40,15 @@ from app.phone_utils import normalise_phone
 from app.resume_parser import parse_resumes_from_zip
 from app.ats_ranker import ATSRanker
 from app.saas_db import SaaSDatabase
-from app.telnyx_service import TelnyxService
-from app.vapi_client import VAPIClient
+from app.twilio_service import TwilioService
+from app.media_stream import handle_media_stream
 from app.webhook import (
-    _parse_disposition_from_analysis,
-    _extract_analysis_fields,
-    _infer_disposition_from_summary,
+    _parse_disposition_from_text,
     _cross_check_disposition,
-    _ENDED_REASON_MAP,
+    _TWILIO_STATUS_MAP,
+    analyse_transcript_with_openai,
+    handle_twilio_voice,
+    handle_twilio_status,
 )
 
 log = structlog.get_logger(__name__)
@@ -56,15 +58,14 @@ _db: Optional[SaaSDatabase] = None
 _settings = None
 _auth: Optional[AuthManager] = None
 _billing: Optional[BillingManager] = None
-_vapi: Optional[VAPIClient] = None
+_twilio: Optional[TwilioService] = None
 _ranker: Optional[ATSRanker] = None
-_telnyx: Optional[TelnyxService] = None
 _active_tasks: dict[int, asyncio.Task] = {}  # campaign_id -> task
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _db, _settings, _auth, _billing, _vapi
+    global _db, _settings, _auth, _billing, _twilio
     _settings = get_settings()
     _settings.ensure_dirs()
 
@@ -92,22 +93,15 @@ async def lifespan(app: FastAPI):
             base_url=_settings.webhook_base_url,
         )
 
-    # VAPI
-    _vapi = VAPIClient(_settings)
-
-    # Telnyx
-    global _telnyx
-    if _settings.telnyx_api_key:
-        _telnyx = TelnyxService(
-            api_key=_settings.telnyx_api_key,
-            markup=_settings.phone_number_markup,
-            vapi_api_key=_settings.vapi_api_key,
-        )
-        log.info("telnyx_service_ready")
+    # Twilio
+    if _settings.twilio_account_sid:
+        _twilio = TwilioService(_settings)
+        log.info("twilio_service_ready")
     else:
-        log.warning("no_telnyx_credentials", msg="Set TELNYX_API_KEY for phone purchasing")
+        log.warning("no_twilio_credentials", msg="Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN")
 
     # ATS Ranker
+    global _ranker
     if _settings.openai_api_key:
         _ranker = ATSRanker(_settings.openai_api_key)
     else:
@@ -115,12 +109,10 @@ async def lifespan(app: FastAPI):
 
     log.info("saas_server_started")
     yield
-    if _telnyx:
-        await _telnyx.close()
+    if _twilio:
+        await _twilio.close()
     if _ranker:
         await _ranker.close()
-    if _vapi:
-        await _vapi.close()
     if _db:
         await _db.close()
     log.info("saas_server_stopped")
@@ -569,6 +561,203 @@ def create_saas_app() -> FastAPI:
         }
 
     # ── Start calls for campaign ────────────────────────────────
+
+    async def _auto_start_calls(campaign_id: int, user_id: int, from_number: str, campaign: dict):
+        """Background task: call all pending candidates in a campaign."""
+        pending = await _db.get_pending_candidates(campaign_id)
+        month = datetime.now(timezone.utc).strftime("%Y-%m")
+        placed = 0
+        errors = 0
+
+        await _db.update_campaign_status(campaign_id, user_id, "active")
+
+        for candidate in pending:
+            if not await _db.can_place_call(user_id):
+                log.info("monthly_limit_reached", user_id=user_id)
+                break
+
+            try:
+                result = await _twilio.place_call(
+                    phone_e164=candidate["phone_e164"],
+                    from_number=from_number,
+                    candidate_name=candidate.get("first_name") or candidate["unique_record_id"],
+                    record_id=candidate["unique_record_id"],
+                    job_role=campaign["job_role"],
+                )
+                call_sid = result.get("id", "")
+                await _db.mark_call_started(candidate["id"], call_sid)
+                await _db.increment_usage(user_id, month)
+                await _db.log_call_event(
+                    user_id=user_id,
+                    campaign_id=campaign_id,
+                    candidate_id=candidate["id"],
+                    vapi_call_id=call_sid,
+                    action="call_placed",
+                    status="in_progress",
+                )
+                placed += 1
+                await asyncio.sleep(2)  # Pace calls
+            except Exception as e:
+                log.error("call_error", candidate_id=candidate["id"], error=str(e))
+                errors += 1
+
+        await _db.update_campaign_status(campaign_id, user_id, "completed")
+        log.info("campaign_calls_done", campaign_id=campaign_id, placed=placed, errors=errors)
+
+    @app.post("/api/campaigns/{campaign_id}/process")
+    async def process_resumes_and_call(
+        campaign_id: int,
+        request: Request,
+        file: UploadFile = File(...),
+        job_description: str = Form(default=""),
+    ):
+        """
+        All-in-one endpoint: upload ZIP of resumes → AI rank → promote top candidates → start calling.
+
+        Form fields:
+          - file: ZIP archive containing resumes (PDF/DOCX/TXT)
+          - job_description: the full job description to rank against
+        """
+        user_id = _auth.require_auth(request)
+        campaign = await _db.get_campaign(campaign_id, user_id)
+        if not campaign:
+            raise HTTPException(404, "Campaign not found")
+
+        if not _ranker:
+            raise HTTPException(503, "Resume ranking not configured. Set OPENAI_API_KEY.")
+
+        if not _twilio:
+            raise HTTPException(503, "Twilio not configured. Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN.")
+
+        if not file.filename or not file.filename.lower().endswith(".zip"):
+            raise HTTPException(400, "File must be a .zip archive containing resumes (PDF/DOCX)")
+
+        zip_data = await file.read()
+        if len(zip_data) > 50 * 1024 * 1024:
+            raise HTTPException(400, "ZIP file too large (max 50 MB)")
+
+        # Use job_description from form, or fall back to campaign's description
+        jd = job_description.strip() or campaign.get("description", "") or campaign["job_role"]
+
+        # Update campaign description if provided
+        if job_description.strip() and job_description.strip() != campaign.get("description", ""):
+            async with _db._pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE campaigns SET description = $1, updated_at = NOW() WHERE id = $2",
+                    job_description.strip(), campaign_id,
+                )
+
+        # 1. Parse resumes from ZIP
+        parsed = parse_resumes_from_zip(zip_data)
+        if not parsed:
+            raise HTTPException(400, "No valid resumes found in ZIP (supported: PDF, DOCX, TXT)")
+
+        valid_resumes = [r for r in parsed if r.get("text") and not r.get("error")]
+        if not valid_resumes:
+            raise HTTPException(400, f"Could not extract text from any of the {len(parsed)} files")
+
+        # 2. Build job description and rank
+        job_desc = f"Job Role: {campaign['job_role']}\n\n{jd}"
+        if campaign.get("custom_prompt"):
+            job_desc += f"\n\nAdditional Requirements:\n{campaign['custom_prompt']}"
+
+        top_percent = _settings.ats_top_percent
+        ranking_result = await _ranker.rank_resumes(
+            resumes=valid_resumes,
+            job_description=job_desc,
+            top_percent=top_percent,
+        )
+
+        # 3. Store rankings in DB
+        await _db.clear_resume_rankings(campaign_id, user_id)
+        selected_set = {r["filename"] for r in ranking_result["selected"]}
+
+        for r in ranking_result["all_ranked"]:
+            await _db.add_resume_ranking(
+                campaign_id=campaign_id,
+                user_id=user_id,
+                filename=r.get("filename", ""),
+                full_name=r.get("full_name", ""),
+                email=r.get("email", ""),
+                phone=r.get("phone", ""),
+                current_title=r.get("current_title", ""),
+                years_experience=int(r.get("years_experience", 0)),
+                resume_text=r.get("resume_text", ""),
+                skills_match=r.get("skills_match", 0),
+                experience_relevance=r.get("experience_relevance", 0),
+                education_fit=r.get("education_fit", 0),
+                overall_suitability=r.get("overall_suitability", 0),
+                total_score=r.get("total_score", 0),
+                reasoning=r.get("reasoning", ""),
+                selected=r["filename"] in selected_set,
+            )
+
+        # 4. Auto-promote selected candidates with phone numbers
+        selected_rankings = await _db.get_resume_rankings(campaign_id, user_id, selected_only=True)
+        promoted = []
+        skipped_no_phone = 0
+
+        for r in selected_rankings:
+            phone_raw = r.get("phone", "").strip()
+            if not phone_raw:
+                skipped_no_phone += 1
+                continue
+
+            e164, valid = normalise_phone(phone_raw)
+            if not valid:
+                skipped_no_phone += 1
+                continue
+
+            name_parts = (r.get("full_name", "") or "").strip().split(maxsplit=1)
+            first_name = name_parts[0] if name_parts else ""
+            last_name = name_parts[1] if len(name_parts) > 1 else ""
+
+            promoted.append({
+                "unique_record_id": f"resume_{r['id']}_{uuid.uuid4().hex[:6]}",
+                "first_name": first_name,
+                "last_name": last_name,
+                "phone_e164": e164,
+                "email": r.get("email", ""),
+            })
+
+        candidates_added = 0
+        if promoted:
+            candidates_added = await _db.add_candidates(campaign_id, user_id, promoted)
+            promoted_ids = [r["id"] for r in selected_rankings if r.get("phone", "").strip()]
+            if promoted_ids:
+                await _db.mark_rankings_promoted(campaign_id, user_id, promoted_ids)
+
+        parse_errors = [r for r in parsed if r.get("error")]
+
+        # Check if user has a phone number for the next step
+        user_phones = await _db.get_phone_numbers(user_id)
+        has_phone = bool(user_phones)
+
+        next_step = (
+            "Buy a phone number, then start calls."
+            if not has_phone
+            else "Ready to start calls!"
+        )
+
+        return {
+            "status": "ok",
+            "rankings": {
+                "total_resumes": ranking_result["stats"]["total_resumes"],
+                "selected": ranking_result["stats"]["selected_count"],
+                "avg_score": ranking_result["stats"]["avg_score"],
+                "cutoff_score": ranking_result["stats"]["cutoff_score"],
+            },
+            "candidates_promoted": candidates_added,
+            "skipped_no_phone": skipped_no_phone,
+            "has_phone_number": has_phone,
+            "parse_errors": [{"filename": e["filename"], "error": e["error"]} for e in parse_errors[:10]],
+            "message": (
+                f"Ranked {ranking_result['stats']['total_resumes']} resumes. "
+                f"{candidates_added} candidates promoted to calls. "
+                + next_step
+            ),
+        }
+
     @app.post("/api/campaigns/{campaign_id}/start")
     async def start_campaign_calls(campaign_id: int, request: Request):
         user_id = _auth.require_auth(request)
@@ -578,30 +767,15 @@ def create_saas_app() -> FastAPI:
 
         # ── Require a purchased phone number ──
         user_phones = await _db.get_phone_numbers(user_id)
-        active_phones = [p for p in user_phones if p.get("vapi_phone_id")]
-        if not active_phones:
+        if not user_phones:
             raise HTTPException(
                 400,
-                "You need to purchase a phone number before starting calls. "
-                "Go to the Phone Numbers tab to buy one.",
+                "You need to buy a phone number first. "
+                "Go to the Phone Numbers tab to purchase one.",
             )
 
-        # Use first active phone number (or allow selecting via body)
-        body = {}
-        try:
-            body = await request.json()
-        except Exception:
-            pass
-        phone_number_id = body.get("phone_number_id")
-        if phone_number_id:
-            chosen = next((p for p in active_phones if p["id"] == phone_number_id), None)
-        else:
-            chosen = active_phones[0]
-
-        if not chosen or not chosen.get("vapi_phone_id"):
-            raise HTTPException(400, "Selected phone number is not registered with VAPI. Please retry registration.")
-
-        vapi_phone_number_id = chosen["vapi_phone_id"]
+        # Use the first active phone number
+        from_number = user_phones[0]["phone_e164"]
 
         # Check usage limits
         can_call = await _db.can_place_call(user_id)
@@ -615,67 +789,10 @@ def create_saas_app() -> FastAPI:
         if campaign_id in _active_tasks and not _active_tasks[campaign_id].done():
             return {"status": "already_running"}
 
-        # Get or create VAPI assistant for this campaign
-        # Re-uses the existing assistant if one was already created for this campaign
-        assistant_id = campaign.get("vapi_assistant_id", "")
-        if not assistant_id:
-            try:
-                assistant_id = await _vapi.create_campaign_assistant(
-                    campaign_name=campaign["name"],
-                    job_role=campaign["job_role"],
-                    job_description=campaign.get("description", ""),
-                    custom_prompt=campaign.get("custom_prompt", ""),
-                )
-                await _db.update_campaign_assistant(campaign_id, assistant_id)
-            except Exception as e:
-                log.error("vapi_assistant_creation_failed", error=str(e))
-                raise HTTPException(503, f"Failed to create VAPI assistant: {e}")
-
         # Start calling in background
-        async def _run():
-            pending = await _db.get_pending_candidates(campaign_id)
-            month = datetime.now(timezone.utc).strftime("%Y-%m")
-            placed = 0
-            errors = 0
-
-            await _db.update_campaign_status(campaign_id, user_id, "active")
-
-            for candidate in pending:
-                # Check per-call limit
-                if not await _db.can_place_call(user_id):
-                    log.info("monthly_limit_reached", user_id=user_id)
-                    break
-
-                try:
-                    result = await _vapi.place_call(
-                        phone_e164=candidate["phone_e164"],
-                        assistant_id=assistant_id,
-                        candidate_name=candidate.get("first_name") or candidate["unique_record_id"],
-                        record_id=candidate["unique_record_id"],
-                        job_role=campaign["job_role"],
-                        phone_number_id=vapi_phone_number_id,
-                    )
-                    vapi_call_id = result.get("id", "")
-                    await _db.mark_call_started(candidate["id"], vapi_call_id)
-                    await _db.increment_usage(user_id, month)
-                    await _db.log_call_event(
-                        user_id=user_id,
-                        campaign_id=campaign_id,
-                        candidate_id=candidate["id"],
-                        vapi_call_id=vapi_call_id,
-                        action="call_placed",
-                        status="in_progress",
-                    )
-                    placed += 1
-                    await asyncio.sleep(2)  # Pace calls
-                except Exception as e:
-                    log.error("call_error", candidate_id=candidate["id"], error=str(e))
-                    errors += 1
-
-            await _db.update_campaign_status(campaign_id, user_id, "completed")
-            log.info("campaign_calls_done", campaign_id=campaign_id, placed=placed, errors=errors)
-
-        _active_tasks[campaign_id] = asyncio.create_task(_run())
+        _active_tasks[campaign_id] = asyncio.create_task(
+            _auto_start_calls(campaign_id, user_id, from_number, campaign)
+        )
 
         return {
             "status": "started",
@@ -772,10 +889,10 @@ def create_saas_app() -> FastAPI:
 
     @app.post("/api/phone-numbers/search")
     async def search_phone_numbers(request: Request):
-        """Search available Telnyx numbers by country/area code."""
+        """Search available Twilio numbers by country/area code."""
         user_id = _auth.require_auth(request)
-        if not _telnyx:
-            raise HTTPException(503, "Phone number purchasing not configured. Set TELNYX_API_KEY.")
+        if not _twilio:
+            raise HTTPException(503, "Phone number purchasing not configured. Set TWILIO_ACCOUNT_SID.")
 
         body = await request.json()
         country = body.get("country_code", "US").upper()
@@ -785,7 +902,7 @@ def create_saas_app() -> FastAPI:
         limit = min(int(body.get("limit", 20)), 30)
 
         try:
-            numbers = await _telnyx.search_available_numbers(
+            numbers = await _twilio.search_available_numbers(
                 country_code=country,
                 area_code=area_code,
                 contains=contains,
@@ -798,48 +915,27 @@ def create_saas_app() -> FastAPI:
 
     @app.post("/api/phone-numbers/purchase")
     async def purchase_phone_number(request: Request):
-        """Purchase a phone number from Telnyx and register with VAPI."""
+        """Purchase a phone number from Twilio."""
         user_id = _auth.require_auth(request)
         db = _require_db()
-        if not _telnyx:
+        if not _twilio:
             raise HTTPException(503, "Phone number purchasing not configured.")
 
         body = await request.json()
         phone_number = body.get("phone_number", "").strip()
         country_code = body.get("country_code", "US").upper()
-        telnyx_price = float(body.get("telnyx_price", 1.00))
+        twilio_price = float(body.get("twilio_price", body.get("telnyx_price", 1.00)))
         our_price = float(body.get("our_price", 1.50))
 
         if not phone_number or not phone_number.startswith("+"):
             raise HTTPException(400, "Valid E.164 phone number required (e.g. +12025551234)")
 
         try:
-            # 1. Purchase from Telnyx
-            telnyx_data = await _telnyx.purchase_number(phone_number)
-            telnyx_id = telnyx_data.get("sid", "")
-            friendly_name = telnyx_data.get("friendly_name", phone_number)
-
-            capabilities_raw = telnyx_data.get("capabilities", [])
-            if isinstance(capabilities_raw, dict):
-                capabilities = capabilities_raw
-            else:
-                feature_names = [f.get("name", "") if isinstance(f, dict) else str(f) for f in capabilities_raw]
-                capabilities = {
-                    "voice": "voice" in feature_names,
-                    "sms": "sms" in feature_names,
-                    "mms": "mms" in feature_names,
-                }
-
-            # 2. Register with VAPI for outbound calling
-            vapi_phone_id = ""
-            try:
-                vapi_phone_id = await _telnyx.register_with_vapi(
-                    phone_number=phone_number,
-                    telnyx_id=telnyx_id,
-                )
-            except Exception as e:
-                log.error("vapi_registration_failed", phone=phone_number, error=str(e))
-                # Number is purchased — save it without VAPI ID, can retry later
+            # 1. Purchase from Twilio
+            twilio_data = await _twilio.purchase_number(phone_number)
+            twilio_sid = twilio_data.get("sid", "")
+            friendly_name = twilio_data.get("friendly_name", phone_number)
+            capabilities = twilio_data.get("capabilities", {})
 
             # 3. Store in our database
             record = await db.add_phone_number(
@@ -847,9 +943,9 @@ def create_saas_app() -> FastAPI:
                 phone_e164=phone_number,
                 friendly_name=friendly_name,
                 country_code=country_code,
-                telnyx_id=telnyx_id,
-                vapi_phone_id=vapi_phone_id,
-                monthly_cost=telnyx_price,
+                telnyx_id=twilio_sid,  # reusing telnyx_id column for twilio SID
+                vapi_phone_id=twilio_sid,  # no separate VAPI registration needed
+                monthly_cost=twilio_price,
                 our_price=our_price,
                 capabilities=capabilities,
             )
@@ -859,12 +955,12 @@ def create_saas_app() -> FastAPI:
 
             log.info("phone_number_purchased",
                      user_id=user_id, phone=phone_number,
-                     telnyx_id=telnyx_id, vapi_id=vapi_phone_id)
+                     twilio_sid=twilio_sid)
 
             return {
                 "status": "purchased",
                 "phone_number": record,
-                "vapi_registered": bool(vapi_phone_id),
+                "vapi_registered": True,  # Twilio numbers work directly
                 "message": f"Phone number {phone_number} purchased successfully!",
             }
 
@@ -876,57 +972,23 @@ def create_saas_app() -> FastAPI:
 
     @app.delete("/api/phone-numbers/{phone_id}")
     async def release_phone_number(phone_id: int, request: Request):
-        """Release a phone number — removes from Telnyx, VAPI, and our DB."""
+        """Release a phone number — removes from Twilio and our DB."""
         user_id = _auth.require_auth(request)
         db = _require_db()
-        if not _telnyx:
+        if not _twilio:
             raise HTTPException(503, "Phone number service not configured.")
 
         record = await db.get_phone_number(phone_id, user_id)
         if not record:
             raise HTTPException(404, "Phone number not found")
 
-        # 1. Delete from VAPI
-        if record.get("vapi_phone_id"):
-            await _telnyx.delete_from_vapi(record["vapi_phone_id"])
+        # Release from Twilio (telnyx_id column stores the Twilio SID)
+        await _twilio.release_number(record["telnyx_id"])
 
-        # 2. Release from Telnyx
-        await _telnyx.release_number(record["telnyx_id"])
-
-        # 3. Mark released in our DB
+        # Mark released in our DB
         await db.release_phone_number(phone_id, user_id)
 
         return {"status": "released", "message": f"Phone number {record['phone_e164']} released."}
-
-    @app.post("/api/phone-numbers/{phone_id}/retry-vapi")
-    async def retry_vapi_registration(phone_id: int, request: Request):
-        """Retry VAPI registration if it failed during purchase."""
-        user_id = _auth.require_auth(request)
-        db = _require_db()
-        if not _telnyx:
-            raise HTTPException(503, "Phone service not configured.")
-
-        record = await db.get_phone_number(phone_id, user_id)
-        if not record:
-            raise HTTPException(404, "Phone number not found")
-
-        if record.get("vapi_phone_id"):
-            return {"status": "already_registered", "vapi_phone_id": record["vapi_phone_id"]}
-
-        try:
-            vapi_phone_id = await _telnyx.register_with_vapi(
-                phone_number=record["phone_e164"],
-                telnyx_id=record["telnyx_id"],
-            )
-            # Update DB
-            async with db._pool.acquire() as conn:
-                await conn.execute(
-                    "UPDATE phone_numbers SET vapi_phone_id = $1 WHERE id = $2",
-                    vapi_phone_id, phone_id,
-                )
-            return {"status": "registered", "vapi_phone_id": vapi_phone_id}
-        except ValueError as e:
-            raise HTTPException(400, str(e))
 
     # ═══════════════════════════════════════════════════════════
     #  Billing routes
@@ -1022,90 +1084,99 @@ def create_saas_app() -> FastAPI:
         return {"ok": True}
 
     # ═══════════════════════════════════════════════════════════
-    #  VAPI Webhook (call results)
+    #  WebSocket Media Stream (Twilio ↔ OpenAI Realtime)
     # ═══════════════════════════════════════════════════════════
-    @app.post("/webhook/vapi")
-    async def vapi_webhook(
-        request: Request,
-        x_vapi_signature: Optional[str] = Header(None, alias="x-vapi-signature"),
-    ):
-        body = await request.body()
+    @app.websocket("/ws/media-stream")
+    async def media_stream_ws(websocket: WebSocket):
+        await handle_media_stream(websocket, _settings, db=_db)
 
-        try:
-            payload = json.loads(body)
-        except json.JSONDecodeError:
-            raise HTTPException(400, "Invalid JSON")
+    # ═══════════════════════════════════════════════════════════
+    #  Twilio Webhooks (call results)
+    # ═══════════════════════════════════════════════════════════
+    @app.post("/webhook/twilio/voice")
+    async def twilio_voice_webhook(request: Request):
+        """Twilio voice webhook — returns TwiML when call connects."""
+        from app.webhook import handle_twilio_voice
+        twiml = await handle_twilio_voice(request, _db, _settings)
+        return Response(content=twiml, media_type="application/xml")
 
-        message_type = payload.get("message", {}).get("type", "")
-        log.info("vapi_webhook", message_type=message_type)
+    @app.post("/webhook/twilio/status")
+    async def twilio_status_webhook(request: Request):
+        """Twilio status callback — processes call completion."""
+        form = await request.form()
+        call_sid = str(form.get("CallSid", ""))
+        call_status = str(form.get("CallStatus", ""))
+        duration = str(form.get("CallDuration", "0"))
+        record_id = request.query_params.get("record_id", "")
 
-        if message_type == "end-of-call-report":
-            await _handle_vapi_end_of_call(payload)
+        log.info("twilio_status_callback", call_sid=call_sid, status=call_status, record_id=record_id)
 
-        return {"ok": True}
-
-    async def _handle_vapi_end_of_call(payload: dict):
-        """Process VAPI end-of-call-report and update candidate."""
-        message = payload.get("message", {})
-        call = message.get("call", {})
-        call_id = call.get("id", "")
-        if not call_id:
-            return
-
-        # Find the candidate
-        candidate = await _db.get_candidate_by_call_id(call_id)
-        if not candidate:
-            metadata = call.get("metadata", {})
-            record_id = metadata.get("unique_record_id", "")
-            if record_id:
+        if call_status != "completed":
+            disposition = _TWILIO_STATUS_MAP.get(call_status)
+            if disposition and record_id:
                 candidate = await _db.get_candidate_by_record_id(record_id)
-            if not candidate:
-                log.warning("vapi_candidate_not_found", call_id=call_id)
-                return
+                if candidate:
+                    await _db.update_call_result(
+                        vapi_call_id=call_sid,
+                        status=disposition.value,
+                        short_summary=f"Call {call_status}",
+                        raw_call_outcome=call_status,
+                    )
+            return {"ok": True}
 
-        ended_reason = call.get("endedReason", "")
-        transcript = message.get("transcript", "")
-        recording_url = message.get("recordingUrl", "") or call.get("recordingUrl", "")
-        analysis = message.get("analysis") or call.get("analysis")
+        # Call completed — analyse with OpenAI
+        if record_id:
+            candidate = await _db.get_candidate_by_record_id(record_id)
+            if candidate:
+                recording_url = ""
+                transcript = ""
+                analysis = {}
 
-        # Extract analysis
-        analysis_fields = _extract_analysis_fields(analysis)
+                # Get recording
+                try:
+                    if _twilio:
+                        recording_url = await _twilio.get_recording_url(call_sid)
+                except Exception as e:
+                    log.error("recording_fetch_failed", error=str(e))
 
-        # Determine disposition
-        disposition = _parse_disposition_from_analysis(analysis)
-        if not disposition:
-            mapped = _ENDED_REASON_MAP.get(ended_reason)
-            if mapped is not None:
-                disposition = mapped
-            else:
-                disposition = _infer_disposition_from_summary(
-                    analysis_fields.get("summary", "")
+                # Analyse with OpenAI if we have a transcript
+                if transcript and _settings.openai_api_key:
+                    try:
+                        analysis = await analyse_transcript_with_openai(
+                            transcript, _settings.openai_api_key
+                        )
+                    except Exception as e:
+                        log.error("analysis_failed", error=str(e))
+
+                disp_str = analysis.get("disposition", "").strip().upper()
+                disposition = None
+                if disp_str:
+                    try:
+                        from app.models import Disposition as Disp
+                        disposition = Disp(disp_str)
+                    except ValueError:
+                        pass
+                if not disposition:
+                    from app.models import Disposition as Disp
+                    disposition = _parse_disposition_from_text(analysis.get("summary", ""))
+
+                summary = analysis.get("summary", f"Call completed, duration {duration}s")
+                disposition = _cross_check_disposition(disposition, summary)
+
+                await _db.update_call_result(
+                    vapi_call_id=call_sid,
+                    status=disposition.value,
+                    short_summary=summary,
+                    raw_call_outcome=call_status,
+                    transcript=transcript,
+                    recording_url=recording_url,
+                    extracted_location=analysis.get("location", ""),
+                    extracted_availability=analysis.get("availability", ""),
                 )
 
-        short_summary = analysis_fields.get("summary", "")
-        if not short_summary and ended_reason:
-            short_summary = f"Call ended: {ended_reason}"
+                log.info("call_result_saved", call_sid=call_sid, disposition=disposition.value)
 
-        # Cross-check
-        disposition = _cross_check_disposition(disposition, short_summary)
-
-        # Update DB
-        await _db.update_call_result(
-            vapi_call_id=call_id,
-            status=disposition.value,
-            short_summary=short_summary,
-            raw_call_outcome=ended_reason,
-            transcript=transcript,
-            recording_url=recording_url,
-            extracted_location=analysis_fields.get("location", ""),
-            extracted_availability=analysis_fields.get("availability", ""),
-        )
-
-        log.info(
-            "call_result_saved",
-            call_id=call_id,
-            disposition=disposition.value,
-        )
+        return {"ok": True}
 
     # ═══════════════════════════════════════════════════════════
     #  Quick test call (debug)
@@ -1120,27 +1191,28 @@ def create_saas_app() -> FastAPI:
         if not phone:
             raise HTTPException(400, "phone is required")
 
-        # Normalize
         e164, valid = normalise_phone(phone)
         if not valid:
             raise HTTPException(400, f"Invalid phone number: {phone}")
 
+        if not _twilio:
+            raise HTTPException(503, "Twilio not configured")
+
         try:
-            assistant_id = await _vapi.get_or_create_assistant()
-            result = await _vapi.place_call(
+            # Use the user's first phone number or default
+            user_phones = await _db.get_phone_numbers(user_id)
+            from_number = _settings.twilio_phone_number
+            if user_phones:
+                from_number = user_phones[0]["phone_e164"]
+
+            result = await _twilio.place_call(
                 phone_e164=e164,
-                assistant_id=assistant_id,
+                from_number=from_number,
                 candidate_name=name,
                 record_id="test-debug",
                 job_role="Test Call",
             )
-            return {"status": "ok", "vapi_response": result}
-        except httpx.HTTPStatusError as e:
-            return {
-                "status": "error",
-                "error": str(e),
-                "response_body": e.response.text,
-            }
+            return {"status": "ok", "twilio_response": result}
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
@@ -1161,23 +1233,14 @@ def create_saas_app() -> FastAPI:
             "candidates": [dict(r) for r in candidates],
         }
 
-    @app.get("/debug/call/{vapi_call_id}")
-    async def debug_call(vapi_call_id: str):
-        """Check VAPI call status (temp debug — remove later)."""
+    @app.get("/debug/call/{call_sid}")
+    async def debug_call(call_sid: str):
+        """Check Twilio call status (temp debug — remove later)."""
         try:
-            data = await _vapi.get_call(vapi_call_id)
-            return {
-                "id": data.get("id"),
-                "status": data.get("status"),
-                "endedReason": data.get("endedReason"),
-                "phoneNumberId": data.get("phoneNumberId"),
-                "customer": data.get("customer"),
-                "startedAt": data.get("startedAt"),
-                "endedAt": data.get("endedAt"),
-                "cost": data.get("cost"),
-                "transcript": data.get("transcript", "")[:500],
-                "analysis": data.get("analysis"),
-            }
+            if not _twilio:
+                return {"error": "Twilio not configured"}
+            data = await _twilio.get_call(call_sid)
+            return data
         except Exception as e:
             return {"error": str(e)}
 

@@ -10,20 +10,14 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import hmac
-import httpx
-import io
-import json
-import shutil
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
 import structlog
-from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
@@ -32,11 +26,11 @@ from app.database import Database
 from app.models import CallRecord, Disposition
 from app.output import generate_output_csv, generate_rejected_csv, generate_run_summary
 from app.scheduler import CallScheduler
-from app.vapi_client import VAPIClient
+from app.twilio_service import TwilioService
+from app.media_stream import handle_media_stream
 from app.webhook import (
-    _handle_end_of_call,
-    _handle_hang,
-    _handle_status_update,
+    handle_twilio_voice,
+    handle_twilio_status,
 )
 
 log = structlog.get_logger(__name__)
@@ -44,29 +38,23 @@ log = structlog.get_logger(__name__)
 # Module-level references populated during lifespan
 _db: Optional[Database] = None
 _settings = None
-_vapi: Optional[VAPIClient] = None
-_assistant_id: str = ""
+_twilio: Optional[TwilioService] = None
 _active_call_task: Optional[asyncio.Task] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Start up: connect DB, init VAPI. Shut down: close both."""
-    global _db, _settings, _vapi, _assistant_id
+    """Start up: connect DB, init Twilio. Shut down: close both."""
+    global _db, _settings, _twilio
     _settings = get_settings()
     _settings.ensure_dirs()
     _db = Database(_settings.database_path)
     await _db.connect()
-    _vapi = VAPIClient(_settings)
-    try:
-        _assistant_id = await _vapi.get_or_create_assistant()
-    except Exception as e:
-        log.warning("vapi_assistant_init_failed", error=str(e))
-        _assistant_id = _settings.vapi_assistant_id or ""
-    log.info("server_started", db=str(_settings.database_path), assistant_id=_assistant_id)
+    _twilio = TwilioService(_settings)
+    log.info("server_started", db=str(_settings.database_path))
     yield
-    if _vapi:
-        await _vapi.close()
+    if _twilio:
+        await _twilio.close()
     await _db.close()
     log.info("server_stopped")
 
@@ -104,27 +92,19 @@ def create_app() -> FastAPI:
     async def test_call(phone: str = Form(...), name: str = Form(default="Test")):
         """
         Immediately attempt one outbound call (synchronous) and return
-        the VAPI response or error — useful for debugging.
+        the Twilio response or error — useful for debugging.
         """
-        if not _assistant_id:
-            return {"error": "No assistant ID — VAPI not configured or init failed."}
+        if not _settings.twilio_account_sid:
+            return {"error": "No Twilio credentials — set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN."}
         try:
-            result = await _vapi.place_call(
+            result = await _twilio.place_call(
                 phone_e164=phone,
-                assistant_id=_assistant_id,
+                from_number=_settings.twilio_phone_number,
                 candidate_name=name,
                 record_id="test-debug",
                 job_role="Test Call",
             )
-            return {"status": "ok", "vapi_response": result}
-        except httpx.HTTPStatusError as e:
-            return {
-                "status": "error",
-                "error": str(e),
-                "response_body": e.response.text,
-                "status_code": e.response.status_code,
-                "assistant_id": _assistant_id,
-            }
+            return {"status": "ok", "twilio_response": result}
         except Exception as e:
             return {"status": "error", "error": str(e), "type": type(e).__name__}
 
@@ -216,10 +196,10 @@ def create_app() -> FastAPI:
         """
         global _active_call_task
 
-        if not _assistant_id:
+        if not _settings.twilio_account_sid:
             raise HTTPException(
                 status_code=503,
-                detail="VAPI assistant not configured. Set VAPI_API_KEY and VAPI_PHONE_NUMBER_ID.",
+                detail="Twilio not configured. Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_PHONE_NUMBER.",
             )
 
         if _active_call_task and not _active_call_task.done():
@@ -228,9 +208,9 @@ def create_app() -> FastAPI:
         run_id = uuid.uuid4().hex[:12]
 
         async def _run_calls():
-            scheduler = CallScheduler(_settings, _db, _vapi, run_id)
+            scheduler = CallScheduler(_settings, _db, _twilio, run_id)
             try:
-                stats = await scheduler.run_batch(_assistant_id)
+                stats = await scheduler.run_batch()
                 log.info("api_call_batch_complete", run_id=run_id, **stats)
             except Exception as e:
                 log.error("api_call_batch_error", run_id=run_id, error=str(e))
@@ -279,48 +259,25 @@ def create_app() -> FastAPI:
         )
 
     # ─────────────────────────────────────────────────────────
-    #   VAPI Webhook
+    #   WebSocket Media Stream (Twilio ↔ OpenAI Realtime)
     # ─────────────────────────────────────────────────────────
-    @app.post("/webhook/vapi")
-    async def vapi_webhook(
-        request: Request,
-        x_vapi_signature: Optional[str] = Header(None, alias="x-vapi-signature"),
-    ):
-        body = await request.body()
+    @app.websocket("/ws/media-stream")
+    async def media_stream_ws(websocket: WebSocket):
+        await handle_media_stream(websocket, _settings, db=_db)
 
-        # Signature verification
-        if _settings and _settings.webhook_secret and _settings.webhook_secret != "change_me":
-            if x_vapi_signature:
-                expected = hmac.new(
-                    _settings.webhook_secret.encode(),
-                    body,
-                    hashlib.sha256,
-                ).hexdigest()
-                if not hmac.compare_digest(expected, x_vapi_signature):
-                    log.warning("webhook_signature_mismatch")
-                    raise HTTPException(status_code=401, detail="Invalid signature")
+    # ─────────────────────────────────────────────────────────
+    #   Twilio Webhooks
+    # ─────────────────────────────────────────────────────────
+    @app.post("/webhook/twilio/voice")
+    async def twilio_voice_webhook(request: Request):
+        """Twilio voice webhook — returns TwiML when call connects."""
+        twiml = await handle_twilio_voice(request, _db, _settings)
+        return Response(content=twiml, media_type="application/xml")
 
-        try:
-            payload = json.loads(body)
-        except json.JSONDecodeError:
-            raise HTTPException(status_code=400, detail="Invalid JSON")
-
-        message_type = payload.get("message", {}).get("type", "")
-
-        log.info(
-            "webhook_received",
-            message_type=message_type,
-            call_id=payload.get("message", {}).get("call", {}).get("id", ""),
-        )
-
-        if message_type == "end-of-call-report":
-            await _handle_end_of_call(payload, _db)
-        elif message_type == "status-update":
-            await _handle_status_update(payload, _db)
-        elif message_type == "hang":
-            await _handle_hang(payload, _db)
-
-        return {"ok": True}
+    @app.post("/webhook/twilio/status")
+    async def twilio_status_webhook(request: Request):
+        """Twilio status callback — processes call completion."""
+        return await handle_twilio_status(request, _db, _settings)
 
     return app
 

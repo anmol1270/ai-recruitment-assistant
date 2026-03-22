@@ -15,7 +15,7 @@ import structlog
 from app.config import Settings
 from app.database import Database
 from app.models import CallRecord, Disposition
-from app.vapi_client import VAPIClient
+from app.twilio_service import TwilioService
 
 log = structlog.get_logger(__name__)
 
@@ -33,12 +33,12 @@ class CallScheduler:
         self,
         settings: Settings,
         db: Database,
-        vapi: VAPIClient,
+        twilio: TwilioService,
         run_id: str | None = None,
     ):
         self.settings = settings
         self.db = db
-        self.vapi = vapi
+        self.twilio = twilio
         self.run_id = run_id or uuid.uuid4().hex[:12]
         self._tz = ZoneInfo(settings.calling_timezone)
         self._sem = asyncio.Semaphore(settings.max_concurrent_calls)
@@ -51,7 +51,7 @@ class CallScheduler:
 
     # ── Public API ──────────────────────────────────────────────
 
-    async def run_batch(self, assistant_id: str) -> dict:
+    async def run_batch(self) -> dict:
         """
         Main entry point: fetch pending records, place calls respecting
         all constraints, and return a summary.
@@ -99,7 +99,7 @@ class CallScheduler:
                 stats["skipped_throttle"] += 1
                 continue
 
-            tasks.append(self._place_single_call(record, assistant_id, stats))
+            tasks.append(self._place_single_call(record, stats))
 
         if tasks:
             await asyncio.gather(*tasks)
@@ -134,7 +134,6 @@ class CallScheduler:
     async def _place_single_call(
         self,
         record: CallRecord,
-        assistant_id: str,
         stats: dict,
     ) -> None:
         """Place one call with concurrency control."""
@@ -163,26 +162,27 @@ class CallScheduler:
                     )
                     return
 
-                # Place the call via VAPI
-                result = await self.vapi.place_call(
+                # Place the call via Twilio
+                from_number = self.settings.twilio_phone_number
+                result = await self.twilio.place_call(
                     phone_e164=record.phone_e164,
-                    assistant_id=assistant_id,
+                    from_number=from_number,
                     candidate_name=record.first_name or record.unique_record_id,
                     record_id=record.unique_record_id,
                     job_role=record.job_role,
                 )
 
-                vapi_call_id = result.get("id", "")
+                call_id = result.get("id", "")
 
                 # Update DB
-                await self.db.mark_call_started(record.unique_record_id, vapi_call_id)
+                await self.db.mark_call_started(record.unique_record_id, call_id)
 
                 # Log the event
                 await self.db.log_run_event(
                     run_id=self.run_id,
                     unique_record_id=record.unique_record_id,
                     action="call_placed",
-                    vapi_call_id=vapi_call_id,
+                    vapi_call_id=call_id,
                     status="in_progress",
                 )
 

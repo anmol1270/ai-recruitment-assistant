@@ -1,17 +1,22 @@
 """
-FastAPI webhook receiver for VAPI call events.
-Processes end-of-call reports and updates the database.
+Twilio webhook receiver for call events.
+Handles:
+  - Voice webhook (TwiML response when call connects → start OpenAI Realtime stream)
+  - Status callback (call completed, failed, etc.)
+  - Transcription / recording callbacks
+  - Disposition analysis via OpenAI after call ends
 """
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 from typing import Optional
+from urllib.parse import parse_qs
 
+import httpx
 import structlog
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request, Query
+from fastapi.responses import Response
 
 from app.config import Settings
 from app.database import Database
@@ -19,54 +24,72 @@ from app.models import Disposition
 
 log = structlog.get_logger(__name__)
 
-# Map VAPI ended reasons to our dispositions
-_ENDED_REASON_MAP: dict[str, Disposition] = {
-    "customer-did-not-answer": Disposition.NO_ANSWER,
-    "customer-busy": Disposition.BUSY,
-    "voicemail": Disposition.VOICEMAIL,
-    "machine-detected": Disposition.VOICEMAIL,
-    "customer-did-not-pick-up": Disposition.NO_ANSWER,
-    "silence-timed-out": Disposition.NO_ANSWER,
-    "phone-call-provider-closed-websocket": Disposition.FAILED,
-    "error": Disposition.FAILED,
-    "pipeline-error": Disposition.FAILED,
-    # Successful call endings — these should NOT default to FAILED
-    "customer-ended-call": None,  # None = rely on analysis disposition
-    "assistant-ended-call": None,
-    "assistant-said-end-call-phrase": None,
-    "max-duration-reached": None,
+# Map Twilio call status to our dispositions
+_TWILIO_STATUS_MAP: dict[str, Disposition] = {
+    "busy": Disposition.BUSY,
+    "no-answer": Disposition.NO_ANSWER,
+    "failed": Disposition.FAILED,
+    "canceled": Disposition.FAILED,
 }
 
+# System prompt for recruitment screening
+RECRUITMENT_SYSTEM_PROMPT = """You are a friendly, professional recruitment assistant calling on behalf of a recruitment agency.
 
-def _parse_disposition_from_analysis(analysis: Optional[dict]) -> Optional[Disposition]:
-    """Extract disposition from VAPI structured analysis data."""
-    if not analysis:
-        return None
+Your goal is to have a SHORT screening call (under 2 minutes).
 
-    structured = analysis.get("structuredData") or analysis.get("structured_data") or {}
-    disp_str = structured.get("disposition", "").strip().upper().replace(" ", "_").replace("-", "_")
+CONVERSATION FLOW:
+1. Greet the candidate by first name. Introduce yourself: "Hi {first_name}, this is an AI assistant calling from the recruitment team. I hope I'm not catching you at a bad time?"
+2. If they say it's a bad time, politely ask when would be better, note it, and end the call.
+3. Ask the KEY QUESTION: "I'm reaching out because we have your profile on file. I just wanted to check — are you currently open to new opportunities, or are you actively looking for a new role?"
+4. Based on their answer:
+   - If ACTIVELY LOOKING: Say "That's great to hear!" Then ask: "Could you briefly tell me what kind of role or location you're looking for?" Note their answer.
+   - If OPEN BUT NOT ACTIVELY LOOKING: Say "Understood, good to know. We'll keep you in mind for anything relevant."
+   - If NOT LOOKING: Say "No problem at all. Thanks for letting me know. We'll update our records."
+   - If they say WRONG NUMBER or they're not who we're looking for: Apologise and end politely.
+5. Thank them for their time and end the call.
 
-    if not disp_str:
-        return None
+RULES:
+- Be concise and respectful of their time
+- Do NOT pressure anyone
+- If they ask to be removed from the list, confirm you'll do so immediately
+- Keep the entire call under 2 minutes
+- Speak naturally and conversationally
+- If you detect voicemail, leave a brief message: "Hi {first_name}, this is a call from the recruitment team. We were checking if you're open to new opportunities. No need to call back — we may try again another time. Thanks!"
+"""
 
-    # Exact match
-    try:
-        return Disposition(disp_str)
-    except ValueError:
-        pass
+CAMPAIGN_SCREENING_PROMPT = """You are a friendly, professional recruitment assistant calling on behalf of a recruitment agency.
 
-    # Fuzzy match — check if any enum value is contained in the string
-    for d in Disposition:
-        if d.value in disp_str or disp_str in d.value:
-            return d
+You are conducting a preliminary screening call for the following role:
+JOB ROLE: {job_role}
 
-    log.warning("unknown_disposition_from_analysis", raw=disp_str)
-    return None
+JOB DESCRIPTION:
+{job_description}
+
+Your goal is to have a SHORT preliminary screening call (under 3 minutes). Keep it simple and conversational.
+
+CONVERSATION FLOW:
+1. Greet the candidate by first name: "Hi {{first_name}}, this is an AI assistant calling from the recruitment team. I hope I'm not catching you at a bad time?"
+2. If they say it's a bad time, politely ask when would be better, note it, and end the call.
+3. Briefly mention the role: "We're currently looking for a {job_role} and your profile caught our attention. Are you open to hearing more?"
+4. If they're interested, ask these simple screening questions one at a time:
+{screening_questions}
+5. After the questions, thank them: "Great, thank you for your time! Our team will review your responses and get back to you if there's a good fit."
+6. If NOT interested: "No problem at all. Thanks for letting me know. We'll update our records."
+7. If WRONG NUMBER: Apologise and end politely.
+
+RULES:
+- Be concise and respectful of their time
+- Ask questions ONE AT A TIME
+- Do NOT pressure anyone
+- If they ask to be removed from the list, confirm you'll do so immediately
+- Keep the entire call under 3 minutes
+- Speak naturally and conversationally
+"""
 
 
-def _infer_disposition_from_summary(summary: str) -> Disposition:
-    """Best-effort disposition from call summary text when structured data is missing."""
-    s = summary.lower()
+def _parse_disposition_from_text(text: str) -> Disposition:
+    """Infer disposition from transcript or summary text."""
+    s = text.lower()
     if any(kw in s for kw in ["not looking", "not interested", "not open", "declined"]):
         return Disposition.NOT_LOOKING
     if any(kw in s for kw in ["actively looking", "open to", "interested in", "looking for"]):
@@ -77,230 +100,301 @@ def _infer_disposition_from_summary(summary: str) -> Disposition:
         return Disposition.WRONG_NUMBER
     if any(kw in s for kw in ["remove", "do not call", "unsubscribe"]):
         return Disposition.DNC
-    # Default for completed calls with no clear signal
     return Disposition.NOT_QUALIFIED
 
 
 def _cross_check_disposition(disposition: Disposition, summary: str) -> Disposition:
-    """
-    Cross-check VAPI's structured disposition against the summary text.
-    Fixes cases where VAPI returns ACTIVE_LOOKING but summary says 'not looking'.
-    """
+    """Cross-check disposition against the summary text."""
     if not summary:
         return disposition
 
     s = summary.lower()
 
-    # If disposition is ACTIVE_LOOKING but summary indicates NOT looking
     if disposition == Disposition.ACTIVE_LOOKING:
         not_looking_signals = [
             "not looking", "not interested", "not open",
             "not currently looking", "not actively looking",
             "declined", "not seeking", "happy where",
-            "were not looking", "was not looking",
-            "they were not", "not wanting",
         ]
         if any(kw in s for kw in not_looking_signals):
-            log.warning(
-                "disposition_cross_check_corrected",
-                original="ACTIVE_LOOKING",
-                corrected="NOT_LOOKING",
-                summary_snippet=s[:120],
-            )
+            log.warning("disposition_cross_check_corrected", original="ACTIVE_LOOKING", corrected="NOT_LOOKING")
             return Disposition.NOT_LOOKING
 
-    # If disposition is NOT_LOOKING but summary clearly says actively looking
     if disposition == Disposition.NOT_LOOKING:
         active_signals = [
             "actively looking for", "is looking for a new",
             "interested in new opportunities",
             "open to new roles", "seeking new",
         ]
-        # Only override if NO negative keywords present
         if any(kw in s for kw in active_signals) and not any(
             neg in s for neg in ["not looking", "not interested", "not open", "declined"]
         ):
-            log.warning(
-                "disposition_cross_check_corrected",
-                original="NOT_LOOKING",
-                corrected="ACTIVE_LOOKING",
-                summary_snippet=s[:120],
-            )
+            log.warning("disposition_cross_check_corrected", original="NOT_LOOKING", corrected="ACTIVE_LOOKING")
             return Disposition.ACTIVE_LOOKING
 
     return disposition
 
 
-def _extract_analysis_fields(analysis: Optional[dict]) -> dict:
-    """Extract summary, location, availability from VAPI analysis."""
-    if not analysis:
+async def analyse_transcript_with_openai(
+    transcript: str,
+    openai_api_key: str,
+) -> dict:
+    """
+    Send the call transcript to OpenAI for disposition analysis.
+    Returns structured analysis: disposition, summary, location, availability.
+    """
+    if not transcript or not openai_api_key:
         return {}
 
-    structured = analysis.get("structuredData") or analysis.get("structured_data") or {}
-    summary_data = analysis.get("summary", "")
+    analysis_prompt = """Analyze this recruitment call transcript and extract:
 
-    return {
-        "summary": structured.get("summary", "") or summary_data,
-        "location": structured.get("location", ""),
-        "availability": structured.get("availability", ""),
-    }
+1. disposition: Choose EXACTLY ONE:
+   - ACTIVE_LOOKING: Candidate is looking for a job or open to opportunities
+   - NOT_LOOKING: Candidate is NOT looking or NOT interested
+   - CALL_BACK: Candidate asked to call back later
+   - WRONG_NUMBER: Wrong person or number
+   - DNC: Asked to be removed from call list
+   - NOT_QUALIFIED: Could not determine / call too short
+
+2. summary: 1-2 sentence summary of the call outcome
+3. location: Any location mentioned (empty string if none)
+4. availability: Any availability/timeline mentioned (empty string if none)
+
+IMPORTANT: Pay close attention to negation. "I am NOT looking" = NOT_LOOKING.
+
+Return ONLY valid JSON:
+{"disposition": "...", "summary": "...", "location": "...", "availability": "..."}"""
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {openai_api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [
+                    {"role": "system", "content": analysis_prompt},
+                    {"role": "user", "content": f"TRANSCRIPT:\n{transcript}"},
+                ],
+                "temperature": 0.1,
+                "response_format": {"type": "json_object"},
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        content = data["choices"][0]["message"]["content"]
+        return json.loads(content)
 
 
-def create_webhook_app(settings: Settings, db: Database) -> FastAPI:
-    """Create and return the FastAPI app with webhook routes."""
+def generate_voice_twiml(
+    candidate_name: str = "there",
+    job_role: str = "",
+    settings: Optional[Settings] = None,
+) -> str:
+    """
+    Generate TwiML that connects the call to OpenAI Realtime API
+    via Twilio Media Streams for a real-time AI voice conversation.
+    """
+    webhook_url = settings.webhook_base_url if settings else ""
+    openai_api_key = settings.openai_api_key if settings else ""
 
-    app = FastAPI(
-        title="AI Recruitment Caller — Webhook Receiver",
-        version="0.1.0",
-    )
+    if openai_api_key:
+        # Use Twilio Media Streams → OpenAI Realtime for full AI conversation
+        system_prompt = RECRUITMENT_SYSTEM_PROMPT.replace("{first_name}", candidate_name)
 
-    # ── Health check ────────────────────────────────────────────
-    @app.get("/health")
-    async def health():
-        return {"status": "ok"}
-
-    # ── VAPI webhook endpoint ───────────────────────────────────
-    @app.post("/webhook/vapi")
-    async def vapi_webhook(
-        request: Request,
-        x_vapi_signature: Optional[str] = Header(None, alias="x-vapi-signature"),
-    ):
-        body = await request.body()
-
-        # ── Signature verification (optional but recommended) ───
-        if settings.webhook_secret and settings.webhook_secret != "change_me":
-            if x_vapi_signature:
-                expected = hmac.new(
-                    settings.webhook_secret.encode(),
-                    body,
-                    hashlib.sha256,
-                ).hexdigest()
-                if not hmac.compare_digest(expected, x_vapi_signature):
-                    log.warning("webhook_signature_mismatch")
-                    raise HTTPException(status_code=401, detail="Invalid signature")
-
-        try:
-            payload = json.loads(body)
-        except json.JSONDecodeError:
-            raise HTTPException(status_code=400, detail="Invalid JSON")
-
-        message_type = payload.get("message", {}).get("type", "")
-
-        log.info(
-            "webhook_received",
-            message_type=message_type,
-            call_id=payload.get("message", {}).get("call", {}).get("id", ""),
+        # Escape for XML
+        system_prompt_escaped = (
+            system_prompt
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;")
         )
 
-        # ── Handle different message types ──────────────────────
-        if message_type == "end-of-call-report":
-            await _handle_end_of_call(payload, db)
-        elif message_type == "status-update":
-            await _handle_status_update(payload, db)
-        elif message_type == "hang":
-            await _handle_hang(payload, db)
-        elif message_type == "function-call":
-            # Not used in MVP but placeholder for future
-            pass
+        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Connect>
+        <Stream url="wss://{webhook_url.replace('https://', '').replace('http://', '')}/ws/media-stream">
+            <Parameter name="candidate_name" value="{candidate_name}" />
+            <Parameter name="job_role" value="{job_role}" />
+        </Stream>
+    </Connect>
+</Response>"""
+    else:
+        # Fallback: simple TwiML with speech
+        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Joanna">
+        Hi {candidate_name}, this is an AI assistant calling from the recruitment team.
+        Are you currently open to new opportunities?
+    </Say>
+    <Gather input="speech" timeout="5" speechTimeout="auto"
+            action="{webhook_url}/webhook/twilio/gather?candidate_name={candidate_name}">
+        <Say voice="Polly.Joanna">Please go ahead, I'm listening.</Say>
+    </Gather>
+    <Say voice="Polly.Joanna">
+        I didn't catch that. We'll try again another time. Thanks for your time!
+    </Say>
+</Response>"""
 
-        # VAPI expects a 200 response
-        return {"ok": True}
-
-    return app
+    return twiml
 
 
-async def _handle_end_of_call(payload: dict, db: Database) -> None:
-    """Process end-of-call report from VAPI."""
-    message = payload.get("message", {})
-    call = message.get("call", {})
-    call_id = call.get("id", "")
+async def handle_twilio_voice(
+    request: Request,
+    db: Database,
+    settings: Settings,
+) -> str:
+    """Handle Twilio voice webhook when call connects. Returns TwiML."""
+    form = await request.form()
+    call_sid = form.get("CallSid", "")
+    answered_by = form.get("AnsweredBy", "human")
 
-    if not call_id:
-        log.warning("end_of_call_missing_call_id", payload=payload)
-        return
-
-    # Look up the record by VAPI call ID
-    record = await db.get_record_by_call_id(call_id)
-    if not record:
-        # Try metadata fallback
-        metadata = call.get("metadata", {})
-        record_id = metadata.get("unique_record_id", "")
-        if record_id:
-            record = await db.get_record_by_id(record_id)
-        if not record:
-            log.warning("end_of_call_record_not_found", call_id=call_id)
-            return
-
-    ended_reason = call.get("endedReason", "")
-    transcript = message.get("transcript", "")
-    recording_url = message.get("recordingUrl", "") or call.get("recordingUrl", "")
-    analysis = message.get("analysis") or call.get("analysis")
-
-    # ── Extract analysis fields first (needed for fallback) ─────
-    analysis_fields = _extract_analysis_fields(analysis)
-
-    # ── Determine disposition ───────────────────────────────────
-    # Priority: analysis > ended_reason mapping > COMPLETED/FAILED
-    disposition = _parse_disposition_from_analysis(analysis)
-
-    if not disposition:
-        mapped = _ENDED_REASON_MAP.get(ended_reason)
-        if mapped is not None:
-            disposition = mapped
-        elif ended_reason in _ENDED_REASON_MAP:
-            # Explicitly mapped to None = successful call, but no analysis disposition
-            disposition = _infer_disposition_from_summary(
-                analysis_fields.get("summary", "")
-            )
-        else:
-            # Unknown ended_reason — try summary heuristic before defaulting
-            disposition = _infer_disposition_from_summary(
-                analysis_fields.get("summary", "")
-            )
-
-    # ── Build summary ───────────────────────────────────────────
-    short_summary = analysis_fields.get("summary", "")
-    if not short_summary and ended_reason:
-        short_summary = f"Call ended: {ended_reason}"
-
-    # ── Cross-check disposition against summary ─────────────────
-    disposition = _cross_check_disposition(disposition, short_summary)
-
-    # ── Update database ─────────────────────────────────────────
-    await db.update_call_result(
-        vapi_call_id=call_id,
-        status=disposition,
-        short_summary=short_summary,
-        raw_call_outcome=ended_reason,
-        transcript=transcript,
-        recording_url=recording_url,
-        extracted_location=analysis_fields.get("location", ""),
-        extracted_availability=analysis_fields.get("availability", ""),
-    )
+    # Get context from query params
+    candidate_name = request.query_params.get("candidate_name", "there")
+    record_id = request.query_params.get("record_id", "")
+    job_role = request.query_params.get("job_role", "")
 
     log.info(
-        "call_result_saved",
-        call_id=call_id,
-        record_id=record.unique_record_id,
-        disposition=disposition.value,
-        summary=short_summary[:100],
+        "twilio_voice_webhook",
+        call_sid=call_sid,
+        answered_by=answered_by,
+        candidate=candidate_name,
+    )
+
+    # If voicemail detected, leave a message
+    if answered_by in ("machine_start", "machine_end_beep", "machine_end_silence"):
+        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Joanna">
+        Hi {candidate_name}, this is the recruitment team. We were checking if you're open to new opportunities. No need to call back. Thanks!
+    </Say>
+</Response>"""
+        # Update DB with voicemail disposition
+        if record_id:
+            record = await db.get_record_by_id(record_id)
+            if record:
+                await db.update_call_result(
+                    vapi_call_id=call_sid,
+                    status=Disposition.VOICEMAIL,
+                    short_summary="Voicemail detected, left message",
+                    raw_call_outcome=f"machine_detected:{answered_by}",
+                )
+        return twiml
+
+    # Human answered — generate AI conversation TwiML
+    return generate_voice_twiml(
+        candidate_name=candidate_name,
+        job_role=job_role,
+        settings=settings,
     )
 
 
-async def _handle_status_update(payload: dict, db: Database) -> None:
-    """Handle real-time status updates (ringing, in-progress, etc.)."""
-    message = payload.get("message", {})
-    call = message.get("call", {})
-    call_id = call.get("id", "")
-    status = message.get("status", "")
+async def handle_twilio_status(
+    request: Request,
+    db: Database,
+    settings: Settings,
+) -> dict:
+    """Handle Twilio status callback when call ends."""
+    form = await request.form()
+    call_sid = str(form.get("CallSid", ""))
+    call_status = str(form.get("CallStatus", ""))
+    duration = str(form.get("CallDuration", "0"))
+    record_id = request.query_params.get("record_id", "")
 
-    log.info("call_status_update", call_id=call_id, status=status)
+    log.info(
+        "twilio_status_callback",
+        call_sid=call_sid,
+        status=call_status,
+        duration=duration,
+        record_id=record_id,
+    )
 
+    if call_status != "completed":
+        # Call didn't connect
+        disposition = _TWILIO_STATUS_MAP.get(call_status, Disposition.FAILED)
+        summary = f"Call {call_status}"
 
-async def _handle_hang(payload: dict, db: Database) -> None:
-    """Handle hang/disconnect events."""
-    message = payload.get("message", {})
-    call = message.get("call", {})
-    call_id = call.get("id", "")
+        if record_id:
+            record = await db.get_record_by_id(record_id)
+            if record:
+                await db.update_call_result(
+                    vapi_call_id=call_sid,
+                    status=disposition,
+                    short_summary=summary,
+                    raw_call_outcome=call_status,
+                )
+        return {"ok": True}
 
-    log.info("call_hang_detected", call_id=call_id)
+    # Call completed — fetch transcript and analyse
+    try:
+        from app.twilio_service import TwilioService
+        twilio = TwilioService(settings)
+
+        # Get recording URL
+        recording_url = await twilio.get_recording_url(call_sid)
+
+        # For now, use the transcript from the media stream session
+        # (stored during the WebSocket conversation)
+        transcript = await db.get_call_transcript(call_sid) or ""
+
+        # Analyse transcript with OpenAI
+        analysis = {}
+        if transcript and settings.openai_api_key:
+            try:
+                analysis = await analyse_transcript_with_openai(
+                    transcript, settings.openai_api_key
+                )
+            except Exception as e:
+                log.error("openai_analysis_failed", call_sid=call_sid, error=str(e))
+
+        # Determine disposition
+        disp_str = analysis.get("disposition", "").strip().upper()
+        disposition = None
+        if disp_str:
+            try:
+                disposition = Disposition(disp_str)
+            except ValueError:
+                pass
+
+        if not disposition:
+            disposition = _parse_disposition_from_text(
+                analysis.get("summary", "") or transcript
+            )
+
+        summary = analysis.get("summary", "")
+        if not summary:
+            summary = f"Call completed, duration {duration}s"
+
+        disposition = _cross_check_disposition(disposition, summary)
+
+        # Update database
+        if record_id:
+            record = await db.get_record_by_id(record_id)
+            if record:
+                await db.update_call_result(
+                    vapi_call_id=call_sid,
+                    status=disposition,
+                    short_summary=summary,
+                    raw_call_outcome=call_status,
+                    transcript=transcript,
+                    recording_url=recording_url,
+                    extracted_location=analysis.get("location", ""),
+                    extracted_availability=analysis.get("availability", ""),
+                )
+
+        log.info(
+            "call_result_saved",
+            call_sid=call_sid,
+            record_id=record_id,
+            disposition=disposition.value,
+            summary=summary[:100],
+        )
+
+        await twilio.close()
+    except Exception as e:
+        log.error("status_processing_error", call_sid=call_sid, error=str(e))
+
+    return {"ok": True}

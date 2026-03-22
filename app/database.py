@@ -211,6 +211,15 @@ class Database:
 
     # ── Run log ─────────────────────────────────────────────────
 
+    async def get_call_transcript(self, call_sid: str) -> Optional[str]:
+        """Retrieve stored transcript for a call (set during media stream)."""
+        cursor = await self._db.execute(
+            "SELECT transcript FROM call_records WHERE vapi_call_id = ?",
+            (call_sid,),
+        )
+        row = await cursor.fetchone()
+        return row["transcript"] if row and row["transcript"] else None
+
     async def log_run_event(
         self,
         run_id: str,

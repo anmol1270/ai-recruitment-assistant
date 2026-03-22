@@ -17,11 +17,10 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # ── VAPI ────────────────────────────────────────────────────
-    vapi_api_key: str = Field(default="", description="VAPI API key")
-    vapi_phone_number_id: str = Field(default="", description="VAPI outbound phone number ID")
-    vapi_assistant_id: str = Field(default="", description="Pre-created assistant ID (blank = auto-create)")
-    vapi_base_url: str = Field(default="https://api.vapi.ai")
+    # ── Twilio ──────────────────────────────────────────────────
+    twilio_account_sid: str = Field(default="", description="Twilio Account SID")
+    twilio_auth_token: str = Field(default="", description="Twilio Auth Token")
+    twilio_phone_number: str = Field(default="", description="Default Twilio outbound phone number (E.164)")
 
     # ── Webhook ─────────────────────────────────────────────────
     webhook_base_url: str = Field(default="https://web-production-61074.up.railway.app")
@@ -63,9 +62,8 @@ class Settings(BaseSettings):
     stripe_webhook_secret: str = Field(default="")
     stripe_pro_price_id: str = Field(default="", description="Stripe Price ID for Pro plan")
 
-    # ── Telnyx ──────────────────────────────────────────────────
-    telnyx_api_key: str = Field(default="", description="Telnyx API Key")
-    phone_number_markup: float = Field(default=0.50, description="Markup over Telnyx price per phone number")
+    # ── Phone number marketplace ─────────────────────────────
+    phone_number_markup: float = Field(default=0.50, description="Markup over Twilio price per phone number")
 
     # ── OpenAI (ATS Ranking) ────────────────────────────────────
     openai_api_key: str = Field(default="", description="OpenAI API key for resume ranking")

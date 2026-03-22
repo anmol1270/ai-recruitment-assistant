@@ -10,4 +10,4 @@ echo "HOST: ${HOST:-0.0.0.0}"
 export PORT=${PORT:-8000}
 export HOST=${HOST:-0.0.0.0}
 
-exec uvicorn app.server:app --host $HOST --port $PORT
+exec uvicorn app.saas_server:app --host $HOST --port $PORT
