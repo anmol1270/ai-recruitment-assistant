@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import structlog
 from typing import Optional
+from urllib.parse import urlencode
 
 from twilio.rest import Client as TwilioClient
 from twilio.base.exceptions import TwilioRestException
@@ -183,15 +184,13 @@ class TwilioService:
         # Pass metadata via status callback params
         status_callback_url = (
             f"{self.settings.webhook_base_url}/webhook/twilio/status"
-            f"?record_id={record_id}"
+            f"?{urlencode({'record_id': record_id})}"
         )
 
         # Build the voice webhook URL with query params for context
         voice_url = (
             f"{self.settings.webhook_base_url}/webhook/twilio/voice"
-            f"?candidate_name={name}"
-            f"&record_id={record_id}"
-            f"&job_role={job_role}"
+            f"?{urlencode({'candidate_name': name, 'record_id': record_id, 'job_role': job_role})}"
         )
 
         try:
