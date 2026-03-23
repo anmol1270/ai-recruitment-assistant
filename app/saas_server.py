@@ -1139,6 +1139,18 @@ def create_saas_app() -> FastAPI:
                 except Exception as e:
                     log.error("recording_fetch_failed", error=str(e))
 
+                # Fetch transcript from DB (stored by media_stream.py)
+                # Retry a few times since the WebSocket may still be storing it
+                for _attempt in range(5):
+                    cand = await _db.get_candidate_by_call_id(call_sid)
+                    if cand and cand.get("transcript"):
+                        transcript = cand["transcript"]
+                        break
+                    await asyncio.sleep(1.5)
+
+                if not transcript:
+                    log.warning("no_transcript_found", call_sid=call_sid, record_id=record_id)
+
                 # Analyse with OpenAI if we have a transcript
                 if transcript and _settings.openai_api_key:
                     try:
