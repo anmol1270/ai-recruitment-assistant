@@ -73,15 +73,18 @@ RULES:
 ANALYSIS_PROMPT = """Analyze the call transcript carefully and extract the following:
 
 1. disposition: Choose EXACTLY ONE based on what the candidate ACTUALLY SAID:
-   - ACTIVE_LOOKING: Candidate explicitly said they ARE looking for a job, ARE open to opportunities, or ARE interested in new roles
+   - QUALIFIED: Candidate is interested/looking for a job or open to opportunities. If a person says they are looking for a job, mark them as QUALIFIED.
+   - PARTIALLY_QUALIFIED: Candidate is interested but may lack some required experience
+   - NOT_QUALIFIED: Candidate lacks required experience or is clearly not a fit
    - NOT_LOOKING: Candidate said they are NOT looking, NOT interested, NOT open to new roles, happy where they are, or declined the opportunity
    - CALL_BACK: Candidate said it's a bad time, asked to be called back later, or said they're busy right now
    - WRONG_NUMBER: Wrong person or wrong number
    - DNC: Candidate explicitly asked to be removed from the call list or said do not call again
 
-IMPORTANT: Pay close attention to negation. If the candidate says "I am NOT looking" or "not interested" or "not open", the disposition MUST be NOT_LOOKING, not ACTIVE_LOOKING.
+IMPORTANT: Pay close attention to negation. If the candidate says "I am NOT looking" or "not interested" or "not open", the disposition MUST be NOT_LOOKING.
+If the candidate says they ARE looking or ARE open to opportunities, the disposition MUST be QUALIFIED.
 
-2. summary: A 1-2 sentence summary of the call outcome.
+2. summary: A detailed 2-3 sentence summary of the call outcome. Include whether the candidate is interested, their relevant experience/skills, preferred location, and availability.
 
 3. location: Any location/area the candidate mentioned (empty string if none).
 
@@ -166,17 +169,16 @@ class VAPIClient:
                                     "QUALIFIED",
                                     "PARTIALLY_QUALIFIED",
                                     "NOT_QUALIFIED",
-                                    "ACTIVE_LOOKING",
                                     "NOT_LOOKING",
                                     "CALL_BACK",
                                     "WRONG_NUMBER",
                                     "DNC",
                                 ],
-                                "description": "The call disposition and qualification status",
+                                "description": "The call disposition — QUALIFIED if candidate is looking for a job",
                             },
                             "summary": {
                                 "type": "string",
-                                "description": "1-2 sentence summary including qualification assessment",
+                                "description": "Detailed 2-3 sentence summary including skills, experience, and qualification assessment",
                             },
                             "location": {
                                 "type": "string",
@@ -277,17 +279,16 @@ class VAPIClient:
                                     "QUALIFIED",
                                     "PARTIALLY_QUALIFIED",
                                     "NOT_QUALIFIED",
-                                    "ACTIVE_LOOKING",
                                     "NOT_LOOKING",
                                     "CALL_BACK",
                                     "WRONG_NUMBER",
                                     "DNC",
                                 ],
-                                "description": "The call disposition and qualification status",
+                                "description": "The call disposition — QUALIFIED if candidate is looking for a job",
                             },
                             "summary": {
                                 "type": "string",
-                                "description": "1-2 sentence summary including qualification assessment",
+                                "description": "Detailed 2-3 sentence summary including skills, experience, and qualification assessment",
                             },
                             "location": {
                                 "type": "string",
@@ -324,28 +325,12 @@ class VAPIClient:
         custom_prompt: str = "",
     ) -> str:
         """
-        Generate simple preliminary screening questions based on the job role
-        and description. Returns a formatted string of numbered questions.
+        Generate skill-based screening questions from the job role and description.
+        Extracts key skills/requirements and creates conversational questions
+        about the candidate's experience with each.
         """
-        questions = []
-
-        # Always ask about interest/availability
-        questions.append(f'   a. "Are you currently open to new opportunities, specifically for a {job_role} role?"')
-
-        # Ask about relevant experience
-        questions.append(f'   b. "Could you briefly tell me about your experience related to {job_role}?"')
-
-        # Ask about location/remote preference
-        questions.append('   c. "What location or work arrangement are you looking for — on-site, remote, or hybrid?"')
-
-        # Ask about availability/notice period
-        questions.append('   d. "If things moved forward, how soon could you start or what would your notice period be?"')
-
-        # If there's a job description, add one role-specific question
-        if job_description and len(job_description.strip()) > 20:
-            questions.append(f'   e. "Based on the role requirements, could you share what you think makes you a good fit for this position?"')
-
-        return "\n".join(questions)
+        from app.media_stream import generate_screening_questions
+        return generate_screening_questions(job_role, job_description)
 
     # ── Outbound calls ──────────────────────────────────────────
 

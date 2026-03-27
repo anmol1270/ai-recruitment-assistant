@@ -583,6 +583,7 @@ def create_saas_app() -> FastAPI:
                     candidate_name=candidate.get("first_name") or candidate["unique_record_id"],
                     record_id=candidate["unique_record_id"],
                     job_role=campaign["job_role"],
+                    campaign_id=campaign_id,
                 )
                 call_sid = result.get("id", "")
                 await _db.mark_call_started(candidate["id"], call_sid)

@@ -224,6 +224,9 @@ tr:hover { background: var(--surface2); }
   text-transform: uppercase;
 }
 .badge-pending { background: rgba(253,203,110,.15); color: var(--warning); }
+.badge-qualified { background: rgba(0,184,148,.15); color: var(--success); }
+.badge-partially_qualified { background: rgba(116,185,255,.15); color: var(--info); }
+.badge-not_qualified { background: rgba(225,112,85,.15); color: var(--danger); }
 .badge-active_looking { background: rgba(0,184,148,.15); color: var(--success); }
 .badge-not_looking { background: rgba(225,112,85,.15); color: var(--danger); }
 .badge-call_back { background: rgba(116,185,255,.15); color: var(--info); }
@@ -687,6 +690,7 @@ tr:hover { background: var(--surface2); }
                 <th>Status</th>
                 <th>Summary</th>
                 <th>Location</th>
+                <th>Availability</th>
                 <th>Attempts</th>
               </tr>
             </thead>
@@ -1097,14 +1101,16 @@ async function refreshCampaignDetail() {
 
     var tbody = document.getElementById('candidatesTable');
     if (candidates.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-dim);padding:32px">No candidates yet. Upload a CSV to get started.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-dim);padding:32px">No candidates yet. Upload a CSV to get started.</td></tr>';
     } else {
       tbody.innerHTML = candidates.map(function(c) {
+        var statusLabel = (c.status||'PENDING').replace(/_/g, ' ');
         return '<tr><td>' + esc(c.first_name||'') + ' ' + esc(c.last_name||'') + '</td>' +
           '<td style="font-family:monospace;font-size:12px">' + esc(c.phone_e164) + '</td>' +
-          '<td><span class="badge badge-' + (c.status||'pending').toLowerCase() + '">' + (c.status||'PENDING') + '</span></td>' +
-          '<td style="max-width:300px;font-size:12px">' + esc(c.short_summary||'—') + '</td>' +
+          '<td><span class="badge badge-' + (c.status||'pending').toLowerCase() + '">' + statusLabel + '</span></td>' +
+          '<td style="max-width:400px;font-size:12px;line-height:1.4">' + esc(c.short_summary||'—') + '</td>' +
           '<td style="font-size:12px">' + esc(c.extracted_location||'—') + '</td>' +
+          '<td style="font-size:12px">' + esc(c.extracted_availability||'—') + '</td>' +
           '<td>' + (c.attempt_count||0) + '</td></tr>';
       }).join('');
     }

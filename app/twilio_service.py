@@ -173,6 +173,7 @@ class TwilioService:
         record_id: str = "",
         job_role: str = "",
         assistant_config: Optional[dict] = None,
+        campaign_id: Optional[int] = None,
     ) -> dict:
         """
         Place an outbound call via Twilio.
@@ -188,9 +189,12 @@ class TwilioService:
         )
 
         # Build the voice webhook URL with query params for context
+        voice_params = {'candidate_name': name, 'record_id': record_id, 'job_role': job_role}
+        if campaign_id is not None:
+            voice_params['campaign_id'] = str(campaign_id)
         voice_url = (
             f"{self.settings.webhook_base_url}/webhook/twilio/voice"
-            f"?{urlencode({'candidate_name': name, 'record_id': record_id, 'job_role': job_role})}"
+            f"?{urlencode(voice_params)}"
         )
 
         try:

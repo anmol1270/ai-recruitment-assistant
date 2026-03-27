@@ -35,43 +35,47 @@ _TWILIO_STATUS_MAP: dict[str, Disposition] = {
 # System prompt for recruitment screening
 RECRUITMENT_SYSTEM_PROMPT = """You are a friendly, professional recruitment assistant calling on behalf of a recruitment agency.
 
-Your goal is to have a SHORT screening call (under 2 minutes).
+Your goal is to have a SHORT qualifying screening call (under 3 minutes).
 
 CONVERSATION FLOW:
 1. Greet the candidate by first name. Introduce yourself: "Hi {first_name}, this is an AI assistant calling from the recruitment team. I hope I'm not catching you at a bad time?"
 2. If they say it's a bad time, politely ask when would be better, note it, and end the call.
 3. Ask the KEY QUESTION: "I'm reaching out because we have your profile on file. I just wanted to check — are you currently open to new opportunities, or are you actively looking for a new role?"
 4. Based on their answer:
-   - If ACTIVELY LOOKING: Say "That's great to hear!" Then ask: "Could you briefly tell me what kind of role or location you're looking for?" Note their answer.
-   - If OPEN BUT NOT ACTIVELY LOOKING: Say "Understood, good to know. We'll keep you in mind for anything relevant."
+   - If ACTIVELY LOOKING or OPEN: Say "That's great to hear!" Then ask these qualifying questions one at a time:
+     a. "Could you briefly tell me what kind of role you're looking for?"
+     b. "What location or work arrangement works best for you — on-site, remote, or hybrid?"
+     c. "Could you share a bit about your most relevant experience?"
+     d. "If things moved forward, how soon could you start or what would your notice period be?"
    - If NOT LOOKING: Say "No problem at all. Thanks for letting me know. We'll update our records."
    - If they say WRONG NUMBER or they're not who we're looking for: Apologise and end politely.
-5. Thank them for their time and end the call.
+5. After the questions, thank them: "Great, thank you for your time! Our team will review your responses and get back to you if there's a good fit."
 
 RULES:
 - Be concise and respectful of their time
+- Ask questions ONE AT A TIME — wait for the answer before asking the next
 - Do NOT pressure anyone
 - If they ask to be removed from the list, confirm you'll do so immediately
-- Keep the entire call under 2 minutes
+- Keep the entire call under 3 minutes
 - Speak naturally and conversationally
 - If you detect voicemail, leave a brief message: "Hi {first_name}, this is a call from the recruitment team. We were checking if you're open to new opportunities. No need to call back — we may try again another time. Thanks!"
 """
 
 CAMPAIGN_SCREENING_PROMPT = """You are a friendly, professional recruitment assistant calling on behalf of a recruitment agency.
 
-You are conducting a preliminary screening call for the following role:
+You are conducting a qualifying screening call for the following role:
 JOB ROLE: {job_role}
 
 JOB DESCRIPTION:
 {job_description}
 
-Your goal is to have a SHORT preliminary screening call (under 3 minutes). Keep it simple and conversational.
+Your goal is to have a SHORT qualifying screening call (under 3 minutes). Ask questions that help determine if the candidate is a good fit for this specific role.
 
 CONVERSATION FLOW:
 1. Greet the candidate by first name: "Hi {{first_name}}, this is an AI assistant calling from the recruitment team. I hope I'm not catching you at a bad time?"
 2. If they say it's a bad time, politely ask when would be better, note it, and end the call.
 3. Briefly mention the role: "We're currently looking for a {job_role} and your profile caught our attention. Are you open to hearing more?"
-4. If they're interested, ask these simple screening questions one at a time:
+4. If they're interested, ask these qualifying screening questions one at a time:
 {screening_questions}
 5. After the questions, thank them: "Great, thank you for your time! Our team will review your responses and get back to you if there's a good fit."
 6. If NOT interested: "No problem at all. Thanks for letting me know. We'll update our records."
@@ -79,11 +83,12 @@ CONVERSATION FLOW:
 
 RULES:
 - Be concise and respectful of their time
-- Ask questions ONE AT A TIME
+- Ask questions ONE AT A TIME — wait for the answer before asking the next
 - Do NOT pressure anyone
 - If they ask to be removed from the list, confirm you'll do so immediately
 - Keep the entire call under 3 minutes
 - Speak naturally and conversationally
+- Use the job description to assess whether the candidate's experience is relevant
 """
 
 
@@ -93,7 +98,7 @@ def _parse_disposition_from_text(text: str) -> Disposition:
     if any(kw in s for kw in ["not looking", "not interested", "not open", "declined"]):
         return Disposition.NOT_LOOKING
     if any(kw in s for kw in ["actively looking", "open to", "interested in", "looking for"]):
-        return Disposition.ACTIVE_LOOKING
+        return Disposition.QUALIFIED
     if any(kw in s for kw in ["call back", "callback", "busy", "bad time"]):
         return Disposition.CALL_BACK
     if any(kw in s for kw in ["wrong number", "wrong person"]):
@@ -110,14 +115,18 @@ def _cross_check_disposition(disposition: Disposition, summary: str) -> Disposit
 
     s = summary.lower()
 
+    # Map ACTIVE_LOOKING → QUALIFIED (person looking for a job = qualified)
     if disposition == Disposition.ACTIVE_LOOKING:
+        disposition = Disposition.QUALIFIED
+
+    if disposition == Disposition.QUALIFIED:
         not_looking_signals = [
             "not looking", "not interested", "not open",
             "not currently looking", "not actively looking",
             "declined", "not seeking", "happy where",
         ]
         if any(kw in s for kw in not_looking_signals):
-            log.warning("disposition_cross_check_corrected", original="ACTIVE_LOOKING", corrected="NOT_LOOKING")
+            log.warning("disposition_cross_check_corrected", original="QUALIFIED", corrected="NOT_LOOKING")
             return Disposition.NOT_LOOKING
 
     if disposition == Disposition.NOT_LOOKING:
@@ -129,8 +138,8 @@ def _cross_check_disposition(disposition: Disposition, summary: str) -> Disposit
         if any(kw in s for kw in active_signals) and not any(
             neg in s for neg in ["not looking", "not interested", "not open", "declined"]
         ):
-            log.warning("disposition_cross_check_corrected", original="NOT_LOOKING", corrected="ACTIVE_LOOKING")
-            return Disposition.ACTIVE_LOOKING
+            log.warning("disposition_cross_check_corrected", original="NOT_LOOKING", corrected="QUALIFIED")
+            return Disposition.QUALIFIED
 
     return disposition
 
@@ -149,21 +158,26 @@ async def analyse_transcript_with_openai(
     analysis_prompt = """Analyze this recruitment call transcript and extract:
 
 1. disposition: Choose EXACTLY ONE:
-   - ACTIVE_LOOKING: Candidate is looking for a job or open to opportunities
-   - NOT_LOOKING: Candidate is NOT looking or NOT interested
-   - CALL_BACK: Candidate asked to call back later
+   - QUALIFIED: Candidate is interested/looking for a job AND has relevant experience. If a person says they are looking for a job or open to opportunities, mark them as QUALIFIED.
+   - PARTIALLY_QUALIFIED: Candidate is interested but may lack some required experience
+   - NOT_QUALIFIED: Candidate lacks required experience or is clearly not a fit
+   - NOT_LOOKING: Candidate is NOT looking or NOT interested in opportunities
+   - CALL_BACK: Candidate asked to call back later or said it's a bad time
    - WRONG_NUMBER: Wrong person or number
    - DNC: Asked to be removed from call list
-   - NOT_QUALIFIED: Could not determine / call too short
 
-2. summary: 1-2 sentence summary of the call outcome
-3. location: Any location mentioned (empty string if none)
-4. availability: Any availability/timeline mentioned (empty string if none)
+IMPORTANT RULES:
+- If the candidate says they ARE looking for a job, ARE open to opportunities, or ARE interested → disposition MUST be QUALIFIED (not ACTIVE_LOOKING)
+- Pay close attention to negation. "I am NOT looking" = NOT_LOOKING
+- If screening questions about specific skills were asked, factor the candidate's experience into the disposition
 
-IMPORTANT: Pay close attention to negation. "I am NOT looking" = NOT_LOOKING.
+2. summary: A detailed 2-3 sentence summary of the call outcome. Include: whether the candidate is interested, their relevant experience/skills discussed, preferred location/work arrangement, and availability. This summary will be shown to the recruiter.
+3. location: Any location or work arrangement mentioned (empty string if none)
+4. availability: Any availability/timeline/notice period mentioned (empty string if none)
+5. screening_answers: A brief summary of the candidate's answers to any screening questions asked (skills, experience, years of experience). Empty string if no screening questions were asked.
 
 Return ONLY valid JSON:
-{"disposition": "...", "summary": "...", "location": "...", "availability": "..."}"""
+{"disposition": "...", "summary": "...", "location": "...", "availability": "...", "screening_answers": "..."}"""
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post(
@@ -192,6 +206,7 @@ def generate_voice_twiml(
     candidate_name: str = "there",
     job_role: str = "",
     settings: Optional[Settings] = None,
+    campaign_id: str = "",
 ) -> str:
     """
     Generate TwiML that connects the call to OpenAI Realtime API
@@ -202,23 +217,19 @@ def generate_voice_twiml(
 
     if openai_api_key:
         # Use Twilio Media Streams → OpenAI Realtime for full AI conversation
-        system_prompt = RECRUITMENT_SYSTEM_PROMPT.replace("{first_name}", candidate_name)
-
-        # Escape for XML
-        system_prompt_escaped = (
-            system_prompt
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace('"', "&quot;")
-        )
+        # Escape candidate_name and job_role for XML safety
+        from xml.sax.saxutils import escape as xml_escape
+        safe_name = xml_escape(candidate_name)
+        safe_role = xml_escape(job_role)
+        safe_campaign_id = xml_escape(campaign_id)
 
         twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Connect>
         <Stream url="wss://{webhook_url.replace('https://', '').replace('http://', '')}/ws/media-stream">
-            <Parameter name="candidate_name" value="{candidate_name}" />
-            <Parameter name="job_role" value="{job_role}" />
+            <Parameter name="candidate_name" value="{safe_name}" />
+            <Parameter name="job_role" value="{safe_role}" />
+            <Parameter name="campaign_id" value="{safe_campaign_id}" />
         </Stream>
     </Connect>
 </Response>"""
@@ -256,6 +267,7 @@ async def handle_twilio_voice(
     candidate_name = request.query_params.get("candidate_name", "there")
     record_id = request.query_params.get("record_id", "")
     job_role = request.query_params.get("job_role", "")
+    campaign_id = request.query_params.get("campaign_id", "")
 
     log.info(
         "twilio_voice_webhook",
@@ -266,10 +278,12 @@ async def handle_twilio_voice(
 
     # If voicemail detected, leave a message
     if answered_by in ("machine_start", "machine_end_beep", "machine_end_silence"):
+        from xml.sax.saxutils import escape as xml_escape
+        safe_name = xml_escape(candidate_name)
         twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="Polly.Joanna">
-        Hi {candidate_name}, this is the recruitment team. We were checking if you're open to new opportunities. No need to call back. Thanks!
+        Hi {safe_name}, this is the recruitment team. We were checking if you're open to new opportunities. No need to call back. Thanks!
     </Say>
 </Response>"""
         # Update DB with voicemail disposition
@@ -289,6 +303,7 @@ async def handle_twilio_voice(
         candidate_name=candidate_name,
         job_role=job_role,
         settings=settings,
+        campaign_id=campaign_id,
     )
 
 

@@ -30,6 +30,129 @@ OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-pr
 VOICE = "alloy"
 
 
+def generate_screening_questions(job_role: str, job_description: str) -> str:
+    """
+    Generate skill-based screening questions from the job description.
+    Extracts key skills/requirements and creates conversational questions
+    about the candidate's experience with each.
+    """
+    questions = []
+
+    # Always ask about interest
+    questions.append(
+        f'   a. "Are you currently open to new opportunities, specifically for a {job_role} role?"'
+    )
+
+    # Parse skills/requirements from job description
+    skills = _extract_skills_from_description(job_description)
+
+    if skills:
+        # Ask about experience with the top required skills (max 3 to keep call short)
+        for i, skill in enumerate(skills[:3], start=1):
+            letter = chr(ord('a') + i)  # b, c, d
+            questions.append(
+                f'   {letter}. "Could you tell me about your experience with {skill}? '
+                f'How many years have you worked with it?"'
+            )
+        next_letter = chr(ord('a') + min(len(skills), 3) + 1)
+    else:
+        # Generic experience question if no specific skills found
+        questions.append(
+            f'   b. "Could you briefly tell me about your experience related to {job_role}?"'
+        )
+        next_letter = 'c'
+
+    # Location preference
+    questions.append(
+        f'   {next_letter}. "What location or work arrangement are you looking for — on-site, remote, or hybrid?"'
+    )
+
+    # Availability
+    next_letter = chr(ord(next_letter) + 1)
+    questions.append(
+        f'   {next_letter}. "If things moved forward, how soon could you start or what would your notice period be?"'
+    )
+
+    return "\n".join(questions)
+
+
+def _extract_skills_from_description(description: str) -> list[str]:
+    """
+    Extract key skills and technologies from a job description.
+    Returns a list of skill names found.
+    """
+    if not description or len(description.strip()) < 20:
+        return []
+
+    import re
+
+    desc_lower = description.lower()
+    found_skills = []
+
+    # Common tech skills / frameworks / tools to look for
+    skill_patterns = [
+        # Programming languages
+        r'\bpython\b', r'\bjava(?:script)?\b', r'\btypescript\b', r'\bc\+\+\b',
+        r'\bc#\b', r'\bruby\b', r'\bgo(?:lang)?\b', r'\brust\b', r'\bswift\b',
+        r'\bkotlin\b', r'\bphp\b', r'\bscala\b', r'\br\b(?=\s|,|\.|/)',
+        # Web frameworks
+        r'\breact(?:\.?js)?\b', r'\bangular\b', r'\bvue(?:\.?js)?\b', r'\bnode(?:\.?js)?\b',
+        r'\bdjango\b', r'\bflask\b', r'\bfastapi\b', r'\bspring\b',
+        r'\b\.net\b', r'\brails\b', r'\bnext\.?js\b',
+        # Cloud & DevOps
+        r'\baws\b', r'\bazure\b', r'\bgcp\b', r'\bgoogle cloud\b',
+        r'\bdocker\b', r'\bkubernetes\b', r'\bterraform\b', r'\bci/cd\b',
+        r'\bjenkins\b', r'\bgit(?:hub)?\b',
+        # Data & ML
+        r'\bmachine learning\b', r'\bdeep learning\b', r'\bdata science\b',
+        r'\btensorflow\b', r'\bpytorch\b', r'\bsql\b', r'\bnosql\b',
+        r'\bmongodb\b', r'\bpostgresql?\b', r'\belasticsearch\b',
+        r'\bspark\b', r'\bhadoop\b', r'\bpandas\b',
+        # General skills
+        r'\bproject management\b', r'\bagile\b', r'\bscrum\b',
+        r'\bleadership\b', r'\bcommunication skills?\b',
+        r'\bsales\b', r'\bmarketing\b', r'\baccount management\b',
+        r'\bcustomer service\b', r'\bnegotiation\b',
+        r'\bfinancial analysis\b', r'\baccounting\b', r'\bbookkeeping\b',
+        r'\bexcel\b', r'\btableau\b', r'\bpower bi\b',
+        # Design
+        r'\bfigma\b', r'\bui/?ux\b', r'\badobe\b', r'\bphotoshop\b',
+        # Certifications / methodologies
+        r'\bpmp\b', r'\bcpa\b', r'\bsix sigma\b', r'\bitil\b',
+    ]
+
+    for pattern in skill_patterns:
+        match = re.search(pattern, desc_lower)
+        if match:
+            # Clean up the matched skill name for display
+            skill = match.group(0).strip()
+            # Title-case common acronyms
+            upper_skills = {'aws', 'gcp', 'sql', 'nosql', 'ci/cd', 'pmp', 'cpa', 'ui/ux'}
+            if skill in upper_skills:
+                skill = skill.upper()
+            elif len(skill) <= 4 and skill.isalpha():
+                skill = skill.upper() if skill in {'php', 'css', 'html', 'api'} else skill.capitalize()
+            else:
+                skill = skill.title()
+            # Avoid duplicates (case-insensitive)
+            if not any(s.lower() == skill.lower() for s in found_skills):
+                found_skills.append(skill)
+
+    # Also look for "experience with/in X" patterns in the description
+    exp_patterns = [
+        r'experience (?:with|in|using) ([A-Za-z][A-Za-z\s/+#.]{1,30}?)(?:\.|,|\band\b|\bor\b|\n|$)',
+        r'proficien(?:t|cy) (?:in|with) ([A-Za-z][A-Za-z\s/+#.]{1,30}?)(?:\.|,|\band\b|\bor\b|\n|$)',
+        r'knowledge of ([A-Za-z][A-Za-z\s/+#.]{1,30}?)(?:\.|,|\band\b|\bor\b|\n|$)',
+    ]
+    for pattern in exp_patterns:
+        for match in re.finditer(pattern, description, re.IGNORECASE):
+            skill = match.group(1).strip().rstrip('.')
+            if 2 < len(skill) < 30 and not any(s.lower() == skill.lower() for s in found_skills):
+                found_skills.append(skill)
+
+    return found_skills[:6]  # Cap at 6 skills max
+
+
 async def handle_media_stream(
     websocket: WebSocket,
     settings: Settings,
@@ -54,6 +177,7 @@ async def handle_media_stream(
     call_sid: Optional[str] = None
     candidate_name = "there"
     job_role = ""
+    campaign_id = ""
     transcript_parts: list[str] = []  # Collect transcript fragments
     openai_ws = None
 
@@ -72,13 +196,40 @@ async def handle_media_stream(
 
         async def send_session_update():
             """Configure the OpenAI Realtime session with our system prompt."""
-            system_prompt = RECRUITMENT_SYSTEM_PROMPT.replace(
-                "{first_name}", candidate_name
-            )
-            if job_role:
-                system_prompt = (
-                    f"You are screening for the role: {job_role}\n\n" + system_prompt
+            job_description = ""
+            custom_prompt = ""
+
+            # Fetch campaign details from DB if campaign_id is available
+            if campaign_id and db:
+                try:
+                    campaign_data = await _fetch_campaign(db, campaign_id)
+                    if campaign_data:
+                        job_description = campaign_data.get("description", "") or ""
+                        custom_prompt = campaign_data.get("custom_prompt", "") or ""
+                        if not job_role and campaign_data.get("job_role"):
+                            pass  # job_role is nonlocal, don't reassign here
+                except Exception as e:
+                    log.warning("campaign_fetch_failed", campaign_id=campaign_id, error=str(e))
+
+            # Use campaign-aware prompt if we have a job description
+            if job_role and job_description:
+                screening_questions = generate_screening_questions(job_role, job_description)
+                system_prompt = CAMPAIGN_SCREENING_PROMPT.format(
+                    job_role=job_role,
+                    job_description=job_description,
+                    screening_questions=screening_questions,
                 )
+                system_prompt = system_prompt.replace("{first_name}", candidate_name)
+                if custom_prompt:
+                    system_prompt += f"\n\nADDITIONAL INSTRUCTIONS FROM THE RECRUITER:\n{custom_prompt}"
+            else:
+                system_prompt = RECRUITMENT_SYSTEM_PROMPT.replace(
+                    "{first_name}", candidate_name
+                )
+                if job_role:
+                    system_prompt = (
+                        f"You are screening for the role: {job_role}\n\n" + system_prompt
+                    )
 
             session_config = {
                 "type": "session.update",
@@ -122,6 +273,7 @@ async def handle_media_stream(
                             "candidate_name", "there"
                         )
                         job_role = custom_params.get("job_role", "")
+                        campaign_id = custom_params.get("campaign_id", "")
 
                         log.info(
                             "twilio_stream_started",
@@ -287,3 +439,24 @@ async def _store_transcript(db, call_sid: str, transcript: str) -> None:
                 transcript, call_sid,
             )
         return
+
+
+async def _fetch_campaign(db, campaign_id: str) -> Optional[dict]:
+    """
+    Fetch campaign details (job description, custom prompt) from the database.
+    Works with both SQLite (Database) and PostgreSQL (SaaSDatabase).
+    """
+    if not campaign_id:
+        return None
+
+    # Try PostgreSQL database (app/saas_db.py)
+    if hasattr(db, "_pool") and db._pool is not None:
+        async with db._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT job_role, description, custom_prompt FROM campaigns WHERE id = $1",
+                int(campaign_id),
+            )
+            if row:
+                return dict(row)
+
+    return None
