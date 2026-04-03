@@ -54,8 +54,8 @@ class BillingManager:
     ) -> str:
         """Get or create a Stripe customer. Returns customer ID."""
         # Search for existing
-        customers = stripe.Customer.search(
-            query=f'email:"{email}"',
+        customers = stripe.Customer.list(
+            email=email,
             limit=1,
         )
         if customers.data:
