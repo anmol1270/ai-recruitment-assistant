@@ -505,8 +505,10 @@ tr:hover { background: var(--surface2); }
       </a>
     </div>
     <div style="margin-top:24px;color:var(--text-dim);font-size:13px">
-      Free plan: 50 AI calls/month<br>
-      Pro plan: 500 calls/month &mdash; $49/mo
+      Free trial: 5 AI calls, 10 candidates, 1 phone number<br>
+      Starter: 500 calls/month &mdash; $49/mo<br>
+      Pro: 1,500 calls/month &mdash; $99/mo<br>
+      Enterprise: 5,000 calls/month &mdash; $200/mo
     </div>
   </div>
 </div>
@@ -585,7 +587,7 @@ tr:hover { background: var(--surface2); }
           </div>
         </div>
         <div id="usageUpgrade" style="margin-top:12px;display:none">
-          <button class="btn btn-primary btn-sm" onclick="upgradeToPro()">⚡ Upgrade to Pro — $49/mo</button>
+          <button class="btn btn-primary btn-sm" onclick="showPage('billing')">⚡ Upgrade Plan</button>
         </div>
       </div>
 
@@ -704,37 +706,66 @@ tr:hover { background: var(--surface2); }
     <div class="page" id="page-billing">
       <h2 style="margin-bottom:20px">Billing</h2>
 
-      <div class="stats-grid" style="grid-template-columns:1fr 1fr">
+      <div class="stats-grid" style="grid-template-columns:1fr 1fr 1fr 1fr">
         <div class="card" id="billingFreeCard" style="position:relative">
-          <div style="font-size:14px;font-weight:700;color:var(--text-dim);text-transform:uppercase;margin-bottom:8px">Free Plan</div>
+          <div style="font-size:14px;font-weight:700;color:var(--text-dim);text-transform:uppercase;margin-bottom:8px">Free Trial</div>
           <div style="font-size:36px;font-weight:800">$0<span style="font-size:16px;color:var(--text-dim)">/mo</span></div>
           <ul style="list-style:none;margin:16px 0;line-height:2;font-size:14px;color:var(--text-dim)">
-            <li>✓ 50 AI calls/month</li>
-            <li>✓ Unlimited campaigns</li>
-            <li>✓ CSV export</li>
-            <li>✓ Call recordings</li>
+            <li>✓ 5 AI calls/month</li>
+            <li>✓ Up to 10 candidates</li>
+            <li>✓ 1 phone number</li>
           </ul>
           <div id="billingFreeCurrent" style="display:none">
             <span class="badge badge-active">Current Plan</span>
           </div>
         </div>
-        <div class="card" style="border-color:var(--primary);position:relative">
-          <div style="position:absolute;top:-1px;right:20px;background:var(--primary);color:#fff;padding:4px 12px;border-radius:0 0 8px 8px;font-size:11px;font-weight:700">POPULAR</div>
-          <div style="font-size:14px;font-weight:700;color:var(--primary);text-transform:uppercase;margin-bottom:8px">Pro Plan</div>
+        <div class="card" id="billingStarterCard" style="position:relative">
+          <div style="font-size:14px;font-weight:700;color:var(--primary);text-transform:uppercase;margin-bottom:8px">Starter</div>
           <div style="font-size:36px;font-weight:800">$49<span style="font-size:16px;color:var(--text-dim)">/mo</span></div>
           <ul style="list-style:none;margin:16px 0;line-height:2;font-size:14px;color:var(--text-dim)">
             <li>✓ 500 AI calls/month</li>
-            <li>✓ Unlimited campaigns</li>
-            <li>✓ CSV export</li>
-            <li>✓ Call recordings</li>
+            <li>✓ 1 phone number</li>
+            <li>✓ Email support</li>
+          </ul>
+          <div id="billingStarterAction">
+            <button class="btn btn-primary btn-lg" onclick="upgradePlan('starter')">⚡ Get Starter</button>
+          </div>
+          <div id="billingStarterCurrent" style="display:none">
+            <span class="badge badge-active">Current Plan</span>
+            <button class="btn btn-outline btn-sm" style="margin-left:12px" onclick="manageBilling()">Manage</button>
+          </div>
+        </div>
+        <div class="card" style="border-color:var(--primary);position:relative">
+          <div style="position:absolute;top:-1px;right:20px;background:var(--primary);color:#fff;padding:4px 12px;border-radius:0 0 8px 8px;font-size:11px;font-weight:700">POPULAR</div>
+          <div style="font-size:14px;font-weight:700;color:var(--primary);text-transform:uppercase;margin-bottom:8px">Professional</div>
+          <div style="font-size:36px;font-weight:800">$99<span style="font-size:16px;color:var(--text-dim)">/mo</span></div>
+          <ul style="list-style:none;margin:16px 0;line-height:2;font-size:14px;color:var(--text-dim)">
+            <li>✓ 1,500 AI calls/month</li>
+            <li>✓ 3 phone numbers</li>
             <li>✓ Priority support</li>
           </ul>
           <div id="billingProAction">
-            <button class="btn btn-primary btn-lg" onclick="upgradeToPro()">⚡ Upgrade to Pro</button>
+            <button class="btn btn-primary btn-lg" onclick="upgradePlan('pro')">⚡ Get Pro</button>
           </div>
           <div id="billingProCurrent" style="display:none">
             <span class="badge badge-active">Current Plan</span>
-            <button class="btn btn-outline btn-sm" style="margin-left:12px" onclick="manageBilling()">Manage Subscription</button>
+            <button class="btn btn-outline btn-sm" style="margin-left:12px" onclick="manageBilling()">Manage</button>
+          </div>
+        </div>
+        <div class="card" id="billingEnterpriseCard" style="position:relative">
+          <div style="font-size:14px;font-weight:700;color:var(--primary);text-transform:uppercase;margin-bottom:8px">Enterprise</div>
+          <div style="font-size:36px;font-weight:800">$200<span style="font-size:16px;color:var(--text-dim)">/mo</span></div>
+          <ul style="list-style:none;margin:16px 0;line-height:2;font-size:14px;color:var(--text-dim)">
+            <li>✓ 5,000 AI calls/month</li>
+            <li>✓ 10 phone numbers</li>
+            <li>✓ Dedicated support</li>
+          </ul>
+          <div id="billingEnterpriseAction">
+            <button class="btn btn-primary btn-lg" onclick="upgradePlan('enterprise')">⚡ Get Enterprise</button>
+          </div>
+          <div id="billingEnterpriseCurrent" style="display:none">
+            <span class="badge badge-active">Current Plan</span>
+            <button class="btn btn-outline btn-sm" style="margin-left:12px" onclick="manageBilling()">Manage</button>
           </div>
         </div>
       </div>
@@ -889,6 +920,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const params = new URLSearchParams(window.location.search);
   if (params.get('billing') === 'success') toast('Upgrade successful! Welcome to Pro.', 'success');
   if (params.get('billing') === 'cancelled') toast('Upgrade cancelled.', 'info');
+  if (params.get('phone_purchase') === 'success') toast('Phone number purchased successfully! It will appear in your Phone Numbers list shortly.', 'success');
+  if (params.get('phone_purchase') === 'cancelled') toast('Phone number purchase cancelled.', 'info');
   window.history.replaceState({}, '', '/');
   await checkAuth();
 });
@@ -1299,10 +1332,14 @@ async function deleteCampaign() {
 /* BILLING */
 function loadBilling() {
   if (!currentUser) return;
-  var isPro = currentUser.plan === 'pro';
-  document.getElementById('billingFreeCurrent').style.display = isPro ? 'none' : 'block';
-  document.getElementById('billingProAction').style.display = isPro ? 'none' : 'block';
-  document.getElementById('billingProCurrent').style.display = isPro ? 'block' : 'none';
+  var plan = currentUser.plan || 'free';
+  var plans = ['free', 'starter', 'pro', 'enterprise'];
+  plans.forEach(function(p) {
+    var currentEl = document.getElementById('billing' + p.charAt(0).toUpperCase() + p.slice(1) + 'Current');
+    var actionEl = document.getElementById('billing' + p.charAt(0).toUpperCase() + p.slice(1) + 'Action');
+    if (currentEl) currentEl.style.display = (plan === p) ? 'block' : 'none';
+    if (actionEl) actionEl.style.display = (plan === p) ? 'none' : 'block';
+  });
   var used = currentUser.calls_this_month || 0;
   var limit = currentUser.monthly_limit || 50;
   var pct = Math.min((used / limit) * 100, 100);
@@ -1311,9 +1348,13 @@ function loadBilling() {
   document.getElementById('billingBar').style.width = pct + '%';
 }
 
-async function upgradeToPro() {
+async function upgradePlan(plan) {
   try {
-    var resp = await fetch('/api/billing/checkout', { method: 'POST' });
+    var resp = await fetch('/api/billing/checkout', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ plan: plan })
+    });
     var data = await resp.json();
     if (data.url) window.location.href = data.url;
     else toast('Could not create checkout session', 'error');
@@ -1524,10 +1565,10 @@ async function searchPhoneNumbers() {
 }
 
 async function buyPhoneNumber(phoneNumber, countryCode, telnyxPrice, ourPrice) {
-  if (!confirm('Purchase ' + phoneNumber + ' for $' + Number(ourPrice || 0).toFixed(2) + '/month?')) return;
+  if (!confirm('Purchase ' + phoneNumber + ' for $' + Number(ourPrice || 0).toFixed(2) + '? You will be redirected to Stripe to complete payment.')) return;
 
   try {
-    toast('Purchasing ' + phoneNumber + '...', 'info');
+    toast('Redirecting to payment...', 'info');
     var resp = await fetch('/api/phone-numbers/purchase', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -1541,12 +1582,11 @@ async function buyPhoneNumber(phoneNumber, countryCode, telnyxPrice, ourPrice) {
     var data = await resp.json();
     if (!resp.ok) throw new Error(data.detail || 'Purchase failed');
 
-    toast(data.message || 'Number purchased!', 'success');
-    if (!data.vapi_registered) {
-      toast('Note: VAPI registration pending — you can retry from the Phone Numbers page.', 'info');
+    if (data.url) {
+      window.location.href = data.url;
+    } else {
+      toast('Could not create checkout session', 'error');
     }
-    closeBuyPhoneModal();
-    loadPhoneNumbers();
   } catch (err) {
     toast(err.message, 'error');
   }

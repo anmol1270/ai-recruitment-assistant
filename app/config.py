@@ -57,10 +57,15 @@ class Settings(BaseSettings):
     google_client_secret: str = Field(default="")
     jwt_secret: str = Field(default="change-me-to-a-random-string")
 
+    # ── Admin ───────────────────────────────────────────────────
+    admin_emails: str = Field(default="", description="Comma-separated admin emails that bypass all limits")
+
     # ── Stripe ──────────────────────────────────────────────────
     stripe_secret_key: str = Field(default="")
     stripe_webhook_secret: str = Field(default="")
+    stripe_starter_price_id: str = Field(default="", description="Stripe Price ID for Starter plan")
     stripe_pro_price_id: str = Field(default="", description="Stripe Price ID for Pro plan")
+    stripe_enterprise_price_id: str = Field(default="", description="Stripe Price ID for Enterprise plan")
 
     # ── Phone number marketplace ─────────────────────────────
     phone_number_markup: float = Field(default=0.50, description="Markup over Twilio price per phone number")

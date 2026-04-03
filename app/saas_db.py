@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS users (
     stripe_customer_id      VARCHAR(255),
     stripe_subscription_id  VARCHAR(255),
     calls_this_month        INT DEFAULT 0,
-    monthly_call_limit      INT DEFAULT 50,
+    monthly_call_limit      INT DEFAULT 5,
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
@@ -83,7 +83,7 @@ CREATE TABLE IF NOT EXISTS usage (
     user_id     INT REFERENCES users(id) ON DELETE CASCADE,
     month       VARCHAR(7) NOT NULL,
     calls_made  INT DEFAULT 0,
-    calls_limit INT DEFAULT 50,
+    calls_limit INT DEFAULT 5,
     UNIQUE(user_id, month)
 );
 
@@ -465,7 +465,7 @@ class SaaSDatabase:
                 return dict(row)
             # Create default
             user = await self.get_user_by_id(user_id)
-            limit = user["monthly_call_limit"] if user else 50
+            limit = user["monthly_call_limit"] if user else 5
             row = await conn.fetchrow(
                 """INSERT INTO usage (user_id, month, calls_made, calls_limit)
                    VALUES ($1, $2, 0, $3)
@@ -482,7 +482,7 @@ class SaaSDatabase:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
                 """INSERT INTO usage (user_id, month, calls_made, calls_limit)
-                   VALUES ($1, $2, 1, 50)
+                   VALUES ($1, $2, 1, 5)
                    ON CONFLICT (user_id, month)
                    DO UPDATE SET calls_made = usage.calls_made + 1
                    RETURNING *""",

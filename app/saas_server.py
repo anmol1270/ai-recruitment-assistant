@@ -53,6 +53,9 @@ from app.webhook import (
 
 log = structlog.get_logger(__name__)
 
+# Admin email list (parsed from comma-separated env var at startup)
+_admin_emails: set[str] = set()
+
 # Module-level references — populated during lifespan
 _db: Optional[SaaSDatabase] = None
 _settings = None
@@ -65,9 +68,14 @@ _active_tasks: dict[int, asyncio.Task] = {}  # campaign_id -> task
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _db, _settings, _auth, _billing, _twilio
+    global _db, _settings, _auth, _billing, _twilio, _admin_emails
     _settings = get_settings()
     _settings.ensure_dirs()
+
+    # Parse admin emails
+    if _settings.admin_emails:
+        _admin_emails = {e.strip().lower() for e in _settings.admin_emails.split(",") if e.strip()}
+        log.info("admin_emails_loaded", count=len(_admin_emails))
 
     # PostgreSQL
     if _settings.database_url:
@@ -89,7 +97,9 @@ async def lifespan(app: FastAPI):
         _billing = BillingManager(
             stripe_secret_key=_settings.stripe_secret_key,
             stripe_webhook_secret=_settings.stripe_webhook_secret,
+            stripe_starter_price_id=_settings.stripe_starter_price_id,
             stripe_pro_price_id=_settings.stripe_pro_price_id,
+            stripe_enterprise_price_id=_settings.stripe_enterprise_price_id,
             base_url=_settings.webhook_base_url,
         )
 
@@ -149,6 +159,17 @@ def create_saas_app() -> FastAPI:
             )
         return _db
 
+    async def _maybe_assign_admin(user: dict) -> None:
+        """If user email is in admin list, upgrade to admin plan."""
+        email = user.get("email", "").lower()
+        if email in _admin_emails and user.get("plan") != "admin":
+            await _db.update_user_plan(
+                user_id=user["id"],
+                plan="admin",
+                monthly_call_limit=PLANS["admin"]["calls"],
+            )
+            log.info("admin_plan_assigned", user_id=user["id"], email=email)
+
     # ═══════════════════════════════════════════════════════════
     #  Health check
     # ═══════════════════════════════════════════════════════════
@@ -189,6 +210,7 @@ def create_saas_app() -> FastAPI:
         token = _auth.create_session_token(user["id"], email)
         response = JSONResponse({"ok": True, "email": email})
         _auth.set_session_cookie(response, token)
+        await _maybe_assign_admin(user)
         log.info("quick_login", user_id=user["id"], email=email)
         return response
 
@@ -210,6 +232,7 @@ def create_saas_app() -> FastAPI:
         token = _auth.create_session_token(user["id"], email)
         response = RedirectResponse(url="/", status_code=302)
         _auth.set_session_cookie(response, token)
+        await _maybe_assign_admin(user)
         log.info("user_logged_in", user_id=user["id"], email=email)
         return response
 
@@ -332,6 +355,16 @@ def create_saas_app() -> FastAPI:
                 "phone_e164": v.phone_e164,
                 "email": v.email or "",
             })
+
+        # Enforce candidate limit for free trial
+        user = await _db.get_user_by_id(user_id)
+        user_plan = user.get("plan", "free")
+        max_candidates = PLANS.get(user_plan, PLANS["free"]).get("max_candidates", 0)
+        if max_candidates > 0 and len(candidates) > max_candidates:
+            raise HTTPException(
+                402,
+                f"Your {PLANS[user_plan]['name']} plan allows up to {max_candidates} candidates per upload. Upgrade for unlimited.",
+            )
 
         count = await _db.add_candidates(campaign_id, user_id, candidates)
 
@@ -783,7 +816,7 @@ def create_saas_app() -> FastAPI:
         if not can_call:
             raise HTTPException(
                 402,
-                "Monthly call limit reached. Upgrade to Pro for more calls.",
+                "Monthly call limit reached. Upgrade your plan for more calls.",
             )
 
         # Check if already running
@@ -916,11 +949,25 @@ def create_saas_app() -> FastAPI:
 
     @app.post("/api/phone-numbers/purchase")
     async def purchase_phone_number(request: Request):
-        """Purchase a phone number from Twilio."""
+        """Create a Stripe Checkout session for phone number purchase.
+        Actual Twilio purchase happens in the Stripe webhook after payment."""
         user_id = _auth.require_auth(request)
         db = _require_db()
         if not _twilio:
             raise HTTPException(503, "Phone number purchasing not configured.")
+        if not _billing:
+            raise HTTPException(503, "Billing not configured. Set STRIPE_SECRET_KEY.")
+
+        # Enforce phone number limit per plan
+        user = await _db.get_user_by_id(user_id)
+        user_plan = user.get("plan", "free")
+        max_phones = PLANS.get(user_plan, PLANS["free"]).get("max_phones", 1)
+        current_phones = await _db.get_phone_numbers(user_id)
+        if len(current_phones) >= max_phones:
+            raise HTTPException(
+                402,
+                f"Your {PLANS[user_plan]['name']} plan allows up to {max_phones} phone number(s). Upgrade to add more.",
+            )
 
         body = await request.json()
         phone_number = body.get("phone_number", "").strip()
@@ -931,45 +978,29 @@ def create_saas_app() -> FastAPI:
         if not phone_number or not phone_number.startswith("+"):
             raise HTTPException(400, "Valid E.164 phone number required (e.g. +12025551234)")
 
-        try:
-            # 1. Purchase from Twilio
-            twilio_data = await _twilio.purchase_number(phone_number)
-            twilio_sid = twilio_data.get("sid", "")
-            friendly_name = twilio_data.get("friendly_name", phone_number)
-            capabilities = twilio_data.get("capabilities", {})
-
-            # 3. Store in our database
-            record = await db.add_phone_number(
-                user_id=user_id,
-                phone_e164=phone_number,
-                friendly_name=friendly_name,
-                country_code=country_code,
-                telnyx_id=twilio_sid,  # reusing telnyx_id column for twilio SID
-                vapi_phone_id=twilio_sid,  # no separate VAPI registration needed
-                monthly_cost=twilio_price,
-                our_price=our_price,
-                capabilities=capabilities,
+        # Get or create Stripe customer
+        user = await _db.get_user_by_id(user_id)
+        customer_id = user.get("stripe_customer_id", "")
+        if not customer_id:
+            customer_id = await _billing.get_or_create_customer(
+                user_id, user["email"], user.get("name", "")
             )
+            await _db.update_user_stripe(user_id, customer_id)
 
-            record["monthly_cost"] = float(record.get("monthly_cost", 0))
-            record["our_price"] = float(record.get("our_price", 0))
-
-            log.info("phone_number_purchased",
-                     user_id=user_id, phone=phone_number,
-                     twilio_sid=twilio_sid)
-
-            return {
-                "status": "purchased",
-                "phone_number": record,
-                "vapi_registered": True,  # Twilio numbers work directly
-                "message": f"Phone number {phone_number} purchased successfully!",
-            }
-
-        except ValueError as e:
-            raise HTTPException(400, str(e))
+        try:
+            price_cents = int(our_price * 100)
+            checkout_url = await _billing.create_phone_checkout_session(
+                customer_id=customer_id,
+                user_id=user_id,
+                phone_number=phone_number,
+                country_code=country_code,
+                price_cents=price_cents,
+                twilio_price=twilio_price,
+            )
+            return {"status": "checkout", "url": checkout_url}
         except Exception as e:
-            log.error("purchase_failed", phone=phone_number, error=str(e))
-            raise HTTPException(500, f"Purchase failed: {e}")
+            log.error("phone_checkout_failed", phone=phone_number, error=str(e))
+            raise HTTPException(500, f"Could not create checkout session: {e}")
 
     @app.delete("/api/phone-numbers/{phone_id}")
     async def release_phone_number(phone_id: int, request: Request):
@@ -1000,6 +1031,11 @@ def create_saas_app() -> FastAPI:
         if not _billing:
             raise HTTPException(503, "Billing not configured")
 
+        body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+        plan = body.get("plan", "starter")
+        if plan not in ("starter", "pro", "enterprise"):
+            raise HTTPException(400, "Invalid plan")
+
         user = await _db.get_user_by_id(user_id)
         customer_id = user.get("stripe_customer_id", "")
         if not customer_id:
@@ -1008,7 +1044,7 @@ def create_saas_app() -> FastAPI:
             )
             await _db.update_user_stripe(user_id, customer_id)
 
-        url = await _billing.create_checkout_session(customer_id, user_id)
+        url = await _billing.create_checkout_session(customer_id, user_id, plan)
         return {"url": url}
 
     @app.post("/api/billing/portal")
@@ -1043,19 +1079,67 @@ def create_saas_app() -> FastAPI:
 
         if event_type == "checkout.session.completed":
             session = event["data"]["object"]
-            user_id = int(session.get("metadata", {}).get("user_id", 0))
-            subscription_id = session.get("subscription", "")
+            metadata = session.get("metadata", {})
+            user_id = int(metadata.get("user_id", 0))
+            session_type = metadata.get("type", "")
             customer_id = session.get("customer", "")
 
-            if user_id:
+            if session_type == "phone_purchase" and user_id:
+                # ── Phone number purchase fulfillment ──
+                phone_number = metadata.get("phone_number", "")
+                country_code = metadata.get("country_code", "US")
+                twilio_price = float(metadata.get("twilio_price", 1.00))
+                our_price = float(metadata.get("our_price", 1.50))
+                payment_intent = session.get("payment_intent", "")
+
+                log.info("phone_purchase_paid", user_id=user_id, phone=phone_number,
+                         payment_intent=payment_intent)
+
+                try:
+                    # Purchase the number from Twilio now that payment succeeded
+                    twilio_data = await _twilio.purchase_number(phone_number)
+                    twilio_sid = twilio_data.get("sid", "")
+                    friendly_name = twilio_data.get("friendly_name", phone_number)
+                    capabilities = twilio_data.get("capabilities", {})
+
+                    # Store in our database
+                    await _db.add_phone_number(
+                        user_id=user_id,
+                        phone_e164=phone_number,
+                        friendly_name=friendly_name,
+                        country_code=country_code,
+                        telnyx_id=twilio_sid,
+                        vapi_phone_id=twilio_sid,
+                        monthly_cost=twilio_price,
+                        our_price=our_price,
+                        capabilities=capabilities,
+                    )
+
+                    log.info("phone_number_purchased_via_stripe",
+                             user_id=user_id, phone=phone_number,
+                             twilio_sid=twilio_sid)
+                except Exception as e:
+                    # Payment succeeded but Twilio purchase failed —
+                    # log for manual resolution / refund
+                    log.error("twilio_purchase_after_payment_failed",
+                              user_id=user_id, phone=phone_number,
+                              payment_intent=payment_intent, error=str(e))
+
+            elif user_id:
+                # ── Paid plan subscription ──
+                subscription_id = session.get("subscription", "")
+                plan = metadata.get("plan", "starter")
+                if plan not in PLANS:
+                    plan = "starter"
+
                 await _db.update_user_plan(
                     user_id=user_id,
-                    plan="pro",
-                    monthly_call_limit=PLANS["pro"]["calls"],
+                    plan=plan,
+                    monthly_call_limit=PLANS[plan]["calls"],
                     stripe_customer_id=customer_id,
                     stripe_subscription_id=subscription_id,
                 )
-                log.info("user_upgraded_to_pro", user_id=user_id)
+                log.info("user_upgraded", user_id=user_id, plan=plan)
 
         elif event_type in (
             "customer.subscription.deleted",
